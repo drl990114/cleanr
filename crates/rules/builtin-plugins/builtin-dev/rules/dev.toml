@@ -1,0 +1,214 @@
+id = "builtin-dev"
+name = "Built-in developer caches"
+version = "0.5.0"
+description = "High-confidence generated dependency and build caches for developer projects."
+categories = ["developer-cache", "build-cache", "package-cache"]
+
+[[rules]]
+id = "node-modules"
+label = "Node dependency directory"
+category = "developer-cache"
+match = { dir_name = "node_modules", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "node_modules is a generated dependency directory that package managers can recreate."
+risk_note = "Project dependencies will need to be reinstalled before the project can run again."
+
+[[rules]]
+id = "rust-target"
+label = "Rust target directory"
+category = "build-cache"
+match = { dir_name = "target", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Rust target directories contain generated build artifacts."
+risk_note = "The next cargo build may take longer."
+
+[[rules]]
+id = "python-pycache"
+label = "Python bytecode cache"
+category = "developer-cache"
+match = { dir_name = "__pycache__" }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Python bytecode caches are regenerated automatically."
+risk_note = "Python may recompile modules on the next run."
+
+[[rules]]
+id = "python-pytest-cache"
+label = "pytest cache"
+category = "developer-cache"
+match = { dir_name = ".pytest_cache" }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "pytest caches test metadata and can recreate it."
+risk_note = "The next test run may lose cached state."
+
+[[rules]]
+id = "python-mypy-cache"
+label = "mypy cache"
+category = "developer-cache"
+match = { dir_name = ".mypy_cache" }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "mypy cache directories are generated type-checking artifacts."
+risk_note = "The next mypy run may be slower."
+
+[[rules]]
+id = "python-ruff-cache"
+label = "ruff cache"
+category = "developer-cache"
+match = { dir_name = ".ruff_cache" }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "ruff cache directories are generated linting artifacts."
+risk_note = "The next ruff run may be slower."
+
+[[rules]]
+id = "tox-cache"
+label = "tox environments"
+category = "developer-cache"
+match = { dir_name = ".tox", min_size = 1048576 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "tox environments are generated, but deleting them may remove expensive local environments."
+risk_note = "Review before deleting; environments may take time or network access to rebuild."
+
+[[rules]]
+id = "next-cache"
+label = "Next.js build cache"
+category = "build-cache"
+match = { path_glob = "**/.next/cache", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .next/cache directory contains generated Next.js build cache data."
+risk_note = "The next Next.js build may be slower."
+
+[[rules]]
+id = "cargo-registry"
+label = "Cargo registry cache"
+category = "package-cache"
+match = { path_glob = "**/.cargo/registry", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Cargo registry sources and package archives can be downloaded again."
+risk_note = "Future Cargo builds may need network access and take longer."
+
+[[rules]]
+id = "cargo-git"
+label = "Cargo Git dependency cache"
+category = "package-cache"
+match = { path_glob = "**/.cargo/git", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Cargo Git dependency checkouts are generated package-manager caches."
+risk_note = "Future Cargo builds may need to clone dependencies again."
+
+[[rules]]
+id = "npm-cache"
+label = "npm cache"
+category = "package-cache"
+match = { path_glob = "**/.npm", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The npm cache contains downloaded package data that npm can recreate."
+risk_note = "Future npm installs may need network access."
+
+[[rules]]
+id = "tool-download-cache"
+label = "Developer package download cache"
+category = "package-cache"
+match = { path_glob = "**/.cache/{pnpm,yarn,pip,uv}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Package-manager download caches can be recreated from their registries."
+risk_note = "Future dependency installs may need network access and take longer."
+
+[[rules]]
+id = "macos-tool-download-cache"
+label = "macOS developer package cache"
+category = "package-cache"
+match = { path_glob = "**/Library/Caches/{Yarn,pip,uv}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Package-manager download caches can be recreated from their registries."
+risk_note = "Future dependency installs may need network access and take longer."
+
+[[rules]]
+id = "pnpm-store"
+label = "pnpm content-addressable store"
+category = "package-cache"
+match = { path_glob = "**/{.local/share/pnpm,Library/pnpm}/store", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The pnpm store contains downloaded package content that pnpm can recreate."
+risk_note = "Future pnpm installs may need network access."
+
+[[rules]]
+id = "windows-npm-cache"
+label = "npm cache"
+category = "package-cache"
+match = { dir_name = "npm-cache", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The npm cache contains downloaded package data that npm can recreate."
+risk_note = "Future npm installs may need network access."
+
+[[rules]]
+id = "gradle-cache"
+label = "Gradle cache"
+category = "build-cache"
+match = { path_glob = "**/.gradle/caches", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Gradle caches downloaded dependencies and generated build metadata."
+risk_note = "The next Gradle build may need network access and take longer."
+
+[[rules]]
+id = "maven-repository"
+label = "Maven local repository"
+category = "package-cache"
+match = { path_glob = "**/.m2/repository", min_size = 1048576 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Most Maven repository content can be downloaded again."
+risk_note = "The repository may contain locally installed artifacts that are not available remotely."
+
+[[rules]]
+id = "go-module-cache"
+label = "Go module cache"
+category = "package-cache"
+match = { path_glob = "**/go/pkg/mod", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Downloaded Go modules can be fetched again."
+risk_note = "Future Go builds may need network access."
+
+[[rules]]
+id = "xcode-derived-data"
+label = "Xcode DerivedData"
+category = "build-cache"
+match = { path_glob = "**/Library/Developer/Xcode/DerivedData", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Xcode DerivedData contains generated indexes and build products."
+risk_note = "Xcode will rebuild indexes and products, which may take time."

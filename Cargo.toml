@@ -1,0 +1,74 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/core",
+    "crates/cli",
+    "crates/tui",
+    "crates/agent",
+    "crates/fs",
+    "crates/rules",
+    "crates/plugin-api",
+    "crates/config",
+    "crates/i18n",
+    "crates/tasks",
+]
+default-members = ["crates/cli"]
+
+[workspace.package]
+edition = "2024"
+version = "0.5.0"
+description = "TUI-first, safe local disk cleanup for developer caches"
+license = "MIT"
+authors = ["cleanr contributors"]
+repository = "https://github.com/drl990114/cleanr"
+rust-version = "1.94"
+
+[workspace.dependencies]
+anyhow = "1.0"
+async-openai = { version = "0.41", default-features = false, features = ["chat-completion", "rustls"] }
+ollama-rs = { version = "0.3.5", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["rt"] }
+url = "2.5"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = "0.29"
+dirs = "6.0"
+globset = "0.4"
+ratatui = "0.29"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rust-i18n = { version = "4.1", features = ["load-path"] }
+semver = "1.0"
+sha2 = "0.10"
+schemars = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tempfile = "3.15"
+terminal-light = "1.7"
+thiserror = "2.0"
+toml = "0.8"
+trash = "5.2"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+walkdir = "2.5"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+codegen-units = 1
+lto           = true
+panic         = "abort"
+strip         = true
+
+[profile.dev-opt]
+inherits      = "release"
+codegen-units = 256
+incremental   = true
+lto           = false
+
+[profile.dev.package."*"]
+debug = false
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "allow"

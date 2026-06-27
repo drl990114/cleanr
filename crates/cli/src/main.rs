@@ -1,0 +1,721 @@
+#![forbid(unsafe_code)]
+
+mod config_cmd;
+mod plugin_cmd;
+mod update;
+mod workflow;
+
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "cleanr",
+    version,
+    subcommand_precedence_over_arg = true,
+    about = "TUI-first, safe local disk cleanup"
+)]
+struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Scan roots to use inside the TUI. Defaults to the current directory.
+    #[arg(value_parser)]
+    paths: Vec<PathBuf>,
+
+    /// Read configuration from this TOML file instead of the default location.
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
+    /// Reserved for debug logging output.
+    #[arg(long, env = "CLEANR_LOG_FILE")]
+    log_file: Option<PathBuf>,
+
+    /// Skip the automatic startup update check.
+    #[arg(long, global = true, env = "CLEANR_NO_UPDATE_CHECK")]
+    no_update_check: bool,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Scan paths once and print a summary or JSON report.
+    Scan {
+        /// Scan roots. Defaults to the current directory.
+        #[arg(value_parser)]
+        paths: Vec<PathBuf>,
+
+        /// Include known developer cache locations.
+        #[arg(long)]
+        global: bool,
+
+        /// Print a JSON scan report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Build a cleanup plan without executing it.
+    Plan {
+        /// Scan roots. Defaults to the current directory.
+        #[arg(value_parser)]
+        paths: Vec<PathBuf>,
+
+        /// Include known developer cache locations.
+        #[arg(long)]
+        global: bool,
+
+        /// Write the JSON plan to this path instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Show what would be cleaned without moving anything to trash.
+    DryRun {
+        /// Scan roots. Defaults to the current directory.
+        #[arg(value_parser)]
+        paths: Vec<PathBuf>,
+
+        /// Include known developer cache locations.
+        #[arg(long)]
+        global: bool,
+
+        /// Print the JSON cleanup plan.
+        #[arg(long)]
+        json: bool,
+
+        /// Write the JSON plan to this path.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
+    /// List or restore cleanup manifests without opening the TUI.
+    Restore {
+        #[command(subcommand)]
+        action: RestoreAction,
+    },
+
+    /// Initialize cleanr config and language selection.
+    Init {
+        /// Locale to select, for example en-US or zh-CN.
+        #[arg(long)]
+        locale: String,
+
+        /// Download the language file from GitHub instead of seeding the built-in file.
+        #[arg(long)]
+        from_github: bool,
+
+        /// GitHub repository in owner/name form.
+        #[arg(long, default_value = "drl990114/cleanr")]
+        language_repo: String,
+
+        /// GitHub ref used when downloading from GitHub.
+        #[arg(long, default_value = "main")]
+        language_ref: String,
+
+        /// Expected SHA-256 of the downloaded language file.
+        #[arg(long, requires = "from_github")]
+        language_sha256: Option<String>,
+
+        /// Override the language output directory.
+        #[arg(long)]
+        language_dir: Option<PathBuf>,
+    },
+
+    /// Manage cleanr configuration.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
+    /// Create, install, update, publish, or inspect Cleanr plugins.
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RestoreAction {
+    /// List cleanup runs.
+    List,
+
+    /// Restore one cleanup run. Requires --confirm.
+    Run {
+        /// Execution manifest run ID.
+        run_id: String,
+
+        /// Confirm that files should be moved back from the system trash.
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ConfigAction {
+    /// Print the configuration file path.
+    Path,
+
+    /// Write a default configuration file.
+    Init {
+        /// Overwrite an existing configuration file.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Read a configuration value by dotted key.
+    Get { key: String },
+
+    /// Set a configuration value by dotted key.
+    Set { key: String, value: String },
+
+    /// Conveniently set one or more agent/LLM fields.
+    SetAgent {
+        /// Agent provider: local, openai, ollama.
+        #[arg(long)]
+        provider: Option<String>,
+
+        /// Model name, for example gpt-4o-mini or llama3.2.
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Provider endpoint URL.
+        #[arg(long)]
+        endpoint: Option<String>,
+
+        /// Environment variable that holds the API key.
+        #[arg(long)]
+        api_key_env: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PluginAction {
+    /// Scaffold a local declarative plugin.
+    Init {
+        /// Directory to create or update.
+        path: PathBuf,
+
+        /// Stable plugin manifest ID.
+        #[arg(long)]
+        id: String,
+
+        /// Human-readable plugin name.
+        #[arg(long)]
+        name: String,
+
+        /// Overwrite template files if they already exist.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Validate plugin bundles or individual declaration files.
+    Validate {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+
+    /// Print a JSON schema: manifest, rules, language, or config.
+    Schema { kind: String },
+
+    /// Generate or check a static plugin index.
+    Index {
+        /// Directory containing plugin bundles.
+        #[arg(long, default_value = "plugins")]
+        plugin_dir: PathBuf,
+
+        /// Output path. Defaults to <plugin-dir>/index.json.
+        #[arg(long)]
+        output: Option<PathBuf>,
+
+        /// HTTP base URL that will serve <plugin-dir> contents.
+        #[arg(
+            long,
+            default_value = "https://raw.githubusercontent.com/drl990114/cleanr/main/plugins"
+        )]
+        base_url: String,
+
+        /// Validate the existing output instead of writing it.
+        #[arg(long)]
+        check: bool,
+    },
+
+    /// Install a plugin from an index.
+    Install {
+        /// Plugin manifest ID to install.
+        id: String,
+
+        /// Plugin index URL. Defaults to the GitHub raw URL for --github-repo and --github-ref.
+        #[arg(long)]
+        index_url: Option<String>,
+
+        /// GitHub repository in owner/name form.
+        #[arg(long, default_value = "drl990114/cleanr")]
+        github_repo: String,
+
+        /// GitHub ref used when reading plugins/index.json.
+        #[arg(long, default_value = "main")]
+        github_ref: String,
+
+        /// Override the plugin output directory.
+        #[arg(long)]
+        plugin_dir: Option<PathBuf>,
+
+        /// Replace an installed plugin with the same ID.
+        #[arg(long)]
+        force: bool,
+
+        /// Trust the installed plugin so high-confidence rules may preselect cleanup items.
+        #[arg(long)]
+        trust: bool,
+
+        /// Install files without adding rule packs to cleanup.enabled_rule_packs.
+        #[arg(long)]
+        no_enable: bool,
+    },
+
+    /// Update installed plugins from their recorded index.
+    Update {
+        /// Optional plugin ID. Updates all installed plugins when omitted.
+        id: Option<String>,
+
+        /// Reinstall even when the index version is not newer.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Remove an installed plugin.
+    Remove { id: String },
+
+    /// Add a local plugin bundle to the configured plugin paths.
+    Link {
+        path: PathBuf,
+
+        /// Trust the linked plugin so high-confidence rules may preselect cleanup items.
+        #[arg(long)]
+        trust: bool,
+
+        /// Link without adding rule packs to cleanup.enabled_rule_packs.
+        #[arg(long)]
+        no_enable: bool,
+    },
+
+    /// Remove a linked plugin bundle from the configured plugin paths.
+    Unlink { id: String },
+
+    /// List local installed and linked plugins.
+    List,
+
+    /// Search plugins in an index.
+    Search {
+        query: Option<String>,
+
+        #[arg(long)]
+        index_url: Option<String>,
+
+        #[arg(long, default_value = "drl990114/cleanr")]
+        github_repo: String,
+
+        #[arg(long, default_value = "main")]
+        github_ref: String,
+    },
+
+    /// Show local or index metadata for one plugin.
+    Info {
+        id: String,
+
+        #[arg(long)]
+        index_url: Option<String>,
+
+        #[arg(long, default_value = "drl990114/cleanr")]
+        github_repo: String,
+
+        #[arg(long, default_value = "main")]
+        github_ref: String,
+
+        /// Only inspect locally discovered plugins.
+        #[arg(long)]
+        local: bool,
+    },
+
+    /// Mark a plugin as trusted for high-confidence default selection.
+    Trust { id: String },
+
+    /// Remove plugin trust.
+    Untrust { id: String },
+
+    /// Inspect plugin discovery, manifests, and diagnostics.
+    Doctor,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    if let Some(command) = args.command {
+        return match command {
+            Command::Scan {
+                paths,
+                global,
+                json,
+            } => workflow::scan(workflow::ScanCommand {
+                config_path: args.config,
+                paths,
+                include_global: global,
+                json,
+            }),
+            Command::Plan {
+                paths,
+                global,
+                output,
+            } => workflow::plan(workflow::PlanCommand {
+                config_path: args.config,
+                paths,
+                include_global: global,
+                output,
+            }),
+            Command::DryRun {
+                paths,
+                global,
+                json,
+                output,
+            } => workflow::dry_run(workflow::DryRunCommand {
+                config_path: args.config,
+                paths,
+                include_global: global,
+                json,
+                output,
+            }),
+            Command::Restore { action } => match action {
+                RestoreAction::List => workflow::restore_list(),
+                RestoreAction::Run { run_id, confirm } => workflow::restore_run(&run_id, confirm),
+            },
+            Command::Init {
+                locale,
+                from_github,
+                language_repo,
+                language_ref,
+                language_sha256,
+                language_dir,
+            } => init(
+                locale,
+                from_github,
+                language_repo,
+                language_ref,
+                language_sha256,
+                language_dir,
+                args.config,
+            ),
+            Command::Config { action } => match action {
+                ConfigAction::Path => config_cmd::path(args.config),
+                ConfigAction::Init { force } => config_cmd::init(args.config, force),
+                ConfigAction::Get { key } => config_cmd::get(args.config, &key),
+                ConfigAction::Set { key, value } => config_cmd::set(args.config, &key, &value),
+                ConfigAction::SetAgent {
+                    provider,
+                    model,
+                    endpoint,
+                    api_key_env,
+                } => config_cmd::set_agent(args.config, provider, model, endpoint, api_key_env),
+            },
+            Command::Plugin { action } => match action {
+                PluginAction::Init {
+                    path,
+                    id,
+                    name,
+                    force,
+                } => plugin_cmd::init(plugin_cmd::InitOptions {
+                    path,
+                    id,
+                    name,
+                    force,
+                }),
+                PluginAction::Validate { paths } => plugin_cmd::validate(&paths),
+                PluginAction::Schema { kind } => plugin_cmd::print_schema(&kind),
+                PluginAction::Index {
+                    plugin_dir,
+                    output,
+                    base_url,
+                    check,
+                } => plugin_cmd::generate_index(plugin_cmd::IndexOptions {
+                    plugin_dir,
+                    output,
+                    base_url,
+                    check,
+                }),
+                PluginAction::Install {
+                    id,
+                    index_url,
+                    github_repo,
+                    github_ref,
+                    plugin_dir,
+                    force,
+                    trust,
+                    no_enable,
+                } => plugin_cmd::install(plugin_cmd::InstallOptions {
+                    id,
+                    index_url,
+                    github_repo,
+                    github_ref,
+                    plugin_dir,
+                    config_path: args.config,
+                    trust,
+                    enable: !no_enable,
+                    force,
+                }),
+                PluginAction::Update { id, force } => {
+                    plugin_cmd::update(plugin_cmd::UpdateOptions {
+                        id,
+                        config_path: args.config,
+                        force,
+                    })
+                }
+                PluginAction::Remove { id } => plugin_cmd::remove(plugin_cmd::RemoveOptions {
+                    id,
+                    config_path: args.config,
+                }),
+                PluginAction::Link {
+                    path,
+                    trust,
+                    no_enable,
+                } => plugin_cmd::link(plugin_cmd::LinkOptions {
+                    path,
+                    config_path: args.config,
+                    trust,
+                    enable: !no_enable,
+                }),
+                PluginAction::Unlink { id } => plugin_cmd::unlink(plugin_cmd::UnlinkOptions {
+                    id,
+                    config_path: args.config,
+                }),
+                PluginAction::List => plugin_cmd::list(args.config),
+                PluginAction::Search {
+                    query,
+                    index_url,
+                    github_repo,
+                    github_ref,
+                } => plugin_cmd::search(plugin_cmd::SearchOptions {
+                    query,
+                    index_url,
+                    github_repo,
+                    github_ref,
+                }),
+                PluginAction::Info {
+                    id,
+                    index_url,
+                    github_repo,
+                    github_ref,
+                    local,
+                } => plugin_cmd::info(plugin_cmd::InfoOptions {
+                    id,
+                    index_url,
+                    github_repo,
+                    github_ref,
+                    config_path: args.config,
+                    local,
+                }),
+                PluginAction::Trust { id } => plugin_cmd::trust(plugin_cmd::TrustOptions {
+                    id,
+                    config_path: args.config,
+                }),
+                PluginAction::Untrust { id } => plugin_cmd::untrust(plugin_cmd::TrustOptions {
+                    id,
+                    config_path: args.config,
+                }),
+                PluginAction::Doctor => plugin_cmd::doctor(args.config),
+            },
+        };
+    }
+
+    let config = match args.config {
+        Some(path) => cleanr_config::Config::load_from(path)?,
+        None => cleanr_config::Config::load()?,
+    };
+
+    let roots = if args.paths.is_empty() {
+        vec![std::env::current_dir()?]
+    } else {
+        args.paths
+    };
+
+    let update_available = if args.no_update_check {
+        None
+    } else {
+        update::check_for_update(env!("CARGO_PKG_VERSION"))
+    }
+    .map(|update| cleanr_tui::UpdateNotice {
+        version: update.version,
+        release_url: update.release_url,
+    });
+
+    let _ = args.log_file;
+    cleanr_tui::run(cleanr_tui::TuiOptions {
+        roots,
+        config,
+        update_available,
+    })
+}
+
+fn init(
+    locale: String,
+    from_github: bool,
+    language_repo: String,
+    language_ref: String,
+    language_sha256: Option<String>,
+    language_dir: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
+    let config_path = config_path
+        .or_else(cleanr_config::default_config_path)
+        .context("platform config directory is unavailable; pass --config")?;
+    let language_dir = language_dir
+        .or_else(cleanr_config::default_language_dir)
+        .context("platform language directory is unavailable; pass --language-dir")?;
+
+    let mut config = if config_path.exists() {
+        cleanr_config::Config::load_from(&config_path)?
+    } else {
+        cleanr_config::Config::default()
+    };
+
+    let language_file = if from_github {
+        cleanr_i18n::install_github_language(
+            &locale,
+            &language_repo,
+            &language_ref,
+            &language_dir,
+            language_sha256.as_deref(),
+        )?
+    } else {
+        cleanr_i18n::seed_builtin_language(&locale, &language_dir)?
+    };
+
+    config.i18n.locale = Some(locale);
+    if !config.i18n.dirs.iter().any(|dir| dir == &language_dir) {
+        config.i18n.dirs.push(language_dir.clone());
+    }
+    config.save_to(&config_path)?;
+
+    println!("Config written to {}", config_path.display());
+    println!("Language file installed at {}", language_file.display());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_global_config_after_nested_subcommand() {
+        let args = Args::try_parse_from([
+            "cleanr",
+            "config",
+            "set",
+            "ui.theme",
+            "dark",
+            "--config",
+            "/tmp/cleanr.toml",
+        ])
+        .expect("parse");
+
+        assert_eq!(args.config, Some(PathBuf::from("/tmp/cleanr.toml")));
+        assert!(matches!(
+            args.command,
+            Some(Command::Config {
+                action: ConfigAction::Set { key, value }
+            }) if key == "ui.theme" && value == "dark"
+        ));
+    }
+
+    #[test]
+    fn plugin_validate_requires_at_least_one_path() {
+        assert!(Args::try_parse_from(["cleanr", "plugin", "validate"]).is_err());
+        assert!(Args::try_parse_from(["cleanr", "plugin", "validate", "plugin.toml"]).is_ok());
+    }
+
+    #[test]
+    fn parses_non_interactive_workflow_commands() {
+        let scan = Args::try_parse_from([
+            "cleanr",
+            "--config",
+            "/tmp/cleanr.toml",
+            "scan",
+            "--json",
+            "--global",
+            "/repo/with spaces",
+        ])
+        .expect("parse scan");
+        assert_eq!(scan.config, Some(PathBuf::from("/tmp/cleanr.toml")));
+        assert!(matches!(
+            scan.command,
+            Some(Command::Scan { paths, global: true, json: true })
+                if paths == vec![PathBuf::from("/repo/with spaces")]
+        ));
+
+        let dry_run =
+            Args::try_parse_from(["cleanr", "dry-run", "--output", "/tmp/plan.json", "/repo"])
+                .expect("parse dry-run");
+        assert!(matches!(
+            dry_run.command,
+            Some(Command::DryRun { paths, global: false, json: false, output: Some(path) })
+                if paths == vec![PathBuf::from("/repo")]
+                    && path.as_path() == std::path::Path::new("/tmp/plan.json")
+        ));
+
+        let restore = Args::try_parse_from(["cleanr", "restore", "run", "run-1", "--confirm"])
+            .expect("parse restore");
+        assert!(matches!(
+            restore.command,
+            Some(Command::Restore {
+                action: RestoreAction::Run { run_id, confirm: true }
+            }) if run_id == "run-1"
+        ));
+    }
+
+    #[test]
+    fn restore_run_requires_confirm_before_lookup() {
+        let error = workflow::restore_run("missing-run", false)
+            .expect_err("restore must require explicit confirmation");
+
+        assert!(error.to_string().contains("--confirm"));
+    }
+
+    #[test]
+    fn language_hash_requires_github_install_mode() {
+        assert!(
+            Args::try_parse_from([
+                "cleanr",
+                "init",
+                "--locale",
+                "zh-CN",
+                "--language-sha256",
+                "abc",
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "cleanr",
+                "init",
+                "--locale",
+                "zh-CN",
+                "--from-github",
+                "--language-sha256",
+                "abc",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn paths_are_preserved_when_launching_the_tui_mode() {
+        let args = Args::try_parse_from(["cleanr", "--no-update-check", "/repo/one", "/repo/two"])
+            .expect("parse");
+
+        assert!(args.command.is_none());
+        assert!(args.no_update_check);
+        assert_eq!(
+            args.paths,
+            vec![PathBuf::from("/repo/one"), PathBuf::from("/repo/two")]
+        );
+    }
+}

@@ -1,0 +1,256 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-release:
+    name: Verify release metadata and packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check release version
+        run: node .github/scripts/check-release-version.mjs "${GITHUB_REF_NAME#v}"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets --all-features --locked
+
+      - name: Verify Cargo workspace packages
+        run: |
+          node .github/scripts/publish-workspace-crates.mjs \
+            "${GITHUB_REF_NAME#v}" \
+            --dry-run
+
+      - name: Verify npm wrapper package
+        run: npm pack --dry-run --json ./npm/cleanr >/dev/null
+
+      - name: Verify plugin index
+        run: |
+          node .github/scripts/generate-plugin-index.mjs --check
+          plugin_dirs=(
+            crates/rules/builtin-plugins/builtin-dev
+            crates/rules/builtin-plugins/builtin-general
+          )
+          for dir in plugins/*; do
+            [ -f "$dir/plugin.toml" ] && plugin_dirs+=("$dir")
+          done
+          cargo run --locked -p cleanr-cli -- plugin validate "${plugin_dirs[@]}"
+
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: verify-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            binary: cleanr
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            binary: cleanr
+            cross: true
+          - target: arm-unknown-linux-gnueabihf
+            os: ubuntu-latest
+            binary: cleanr
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            binary: cleanr
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            binary: cleanr
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            binary: cleanr.exe
+          - target: i686-pc-windows-msvc
+            os: windows-latest
+            binary: cleanr.exe
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --version 0.2.5 --locked
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl') && !matrix.cross
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --all-features --target ${{ matrix.target }} --bin cleanr
+          else
+            cargo build --release --locked --all-features --target ${{ matrix.target }} --bin cleanr
+          fi
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanr-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          if-no-files-found: error
+
+  create-draft-release:
+    name: Create draft GitHub release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create draft release and upload binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --generate-notes \
+              --title "${GITHUB_REF_NAME}"
+          fi
+
+          for dir in artifacts/cleanr-*; do
+            target=$(basename "$dir" | sed 's/^cleanr-//')
+            source=$(find "$dir" -maxdepth 1 -type f -print -quit)
+            case "$source" in
+              *.exe) output="cleanr-${target}.exe" ;;
+              *) output="cleanr-${target}" ;;
+            esac
+            cp "$source" "$output"
+            gh release upload "${GITHUB_REF_NAME}" "$output" --clobber
+          done
+
+      - name: Generate and upload install.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node .github/scripts/generate-install-json.mjs "${GITHUB_REF_NAME#v}"
+          gh release upload "${GITHUB_REF_NAME}" install.json --clobber
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: create-draft-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.1
+
+      - name: Authenticate with crates.io using OIDC
+        if: vars.CRATES_IO_TRUSTED_PUBLISHING == 'true'
+        id: crates-io-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish workspace crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
+        run: node .github/scripts/publish-workspace-crates.mjs "${GITHUB_REF_NAME#v}"
+
+  publish-npm:
+    name: Publish npm packages
+    needs: create-draft-release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11.5.1
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish platform packages and wrapper
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: ${{ !github.event.repository.private }}
+        run: node .github/scripts/publish-npm-packages.mjs "${GITHUB_REF_NAME#v}"
+
+  publish-release:
+    name: Publish GitHub release
+    needs:
+      - create-draft-release
+      - publish-crates
+      - publish-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false --latest

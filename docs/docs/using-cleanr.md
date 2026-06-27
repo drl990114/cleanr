@@ -1,0 +1,138 @@
+---
+sidebar_position: 3
+description: Learn Cleanr's scan, review, cleanup, restore, keyboard, and slash-command workflow.
+---
+
+# Using Cleanr
+
+## Choose what to scan
+
+The paths passed at startup become the default scan roots:
+
+```bash
+cleanr ~/projects/app-one ~/projects/app-two
+```
+
+If no path is provided, the current directory is used. Starting Cleanr does not
+immediately scan those paths; press `s` or run `/scan`.
+
+You can replace the current roots from the command palette:
+
+```text
+/scan /home/me/projects/app-one /home/me/Downloads
+```
+
+Add `--global` to include known developer cache locations:
+
+```text
+/scan /home/me/projects --global
+```
+
+Paths typed inside the TUI are not expanded by a shell, so `~` and environment
+variables remain literal text. Use absolute paths. For paths containing spaces,
+pass the quoted path when launching Cleanr instead.
+
+## Review and select candidates
+
+After a scan, press `r` or run `/review`. The review view shows the candidate
+path, size, confidence, reason, and risk note.
+
+High-confidence items from built-in or trusted rules can be preselected.
+Medium- and low-confidence items, and all matches from untrusted plugins, start
+unselected.
+
+Useful keys while reviewing:
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, `↓` / `↑` | Move through the list |
+| `gg` / `G` | Jump to the first / last item |
+| `space` or `Enter` | Select or deselect the current item |
+| `a` or `%` | Select or deselect all items |
+| `i` | Explain the selected path |
+| `c` | Continue to cleanup confirmation |
+| `h` or `Esc` | Return home |
+| `?` | Open keyboard help |
+| `q` | Quit |
+
+Numeric prefixes work with list movement. For example, `5j` moves down five
+items and `12G` jumps to item 12.
+
+## Clean selected items
+
+Press `c` or run `/clean` to review the selected count and size. With the
+default configuration, Cleanr asks for confirmation and initially selects
+**No**.
+
+After confirmation, each selected item is validated again and moved to the
+system trash. Failures are recorded per item; one failed item does not hide
+the result of the others.
+
+`/clean --confirm` skips the confirmation dialog and executes the current
+selection as an explicit local user action. Use it only after reviewing the
+plan.
+
+## Restore a cleanup run
+
+Run `/restore`, select a cleanup run, and press `Enter`. Confirm the restore to
+move available items back to their original paths.
+
+Restore can fail when:
+
+- an item has already been removed from the system trash;
+- another file or directory now exists at the original path;
+- the operating system cannot identify the original trash item;
+- the platform does not support programmatic restore.
+
+Cleanr never overwrites an existing restore target.
+
+## Non-interactive commands
+
+Use these commands from scripts or terminals when you do not need the TUI:
+
+```bash
+cleanr scan --json /path/to/project
+cleanr plan --output cleanr-plan.json /path/to/project
+cleanr dry-run --json /path/to/project
+cleanr restore list
+cleanr restore run <run-id> --confirm
+```
+
+`dry-run` and `plan` only generate a cleanup plan. They do not move files.
+Restore still requires `--confirm`.
+
+## Slash commands
+
+Press `/` to open the command palette. Commands that need scan results appear
+after a scan finishes.
+
+| Command | What it does |
+| --- | --- |
+| `/scan [path...] [--global]` | Scan paths, optionally including known developer caches |
+| `/usage [path...] [--global]` | Scan and open the disk-usage summary |
+| `/review` | Build and show cleanup candidates |
+| `/plan` | Build the current cleanup plan |
+| `/clean` | Review the current selection and request confirmation |
+| `/clean --confirm` | Execute the current selection without the dialog |
+| `/export-plan [path]` | Write the plan as JSON; defaults to `cleanr-plan.json` |
+| `/restore` | Open cleanup history and restore a run |
+| `/rules` | Show active rule packs and rules |
+| `/plugins` | Show loaded declarative plugins |
+| `/languages` | Show and switch installed languages |
+| `/tasks` | Show task activity from the current session |
+| `/help` | Open keyboard help |
+| `/quit` | Quit Cleanr |
+
+`/stats` is an alias for `/usage`, `/lang` for `/languages`, and `/q` for
+`/quit`.
+
+## Inspect disk usage without cleaning
+
+Press `u` or run `/usage`. This performs a scan and opens a size-oriented view.
+It does not move files or automatically execute a cleanup plan.
+
+## Cancel or leave safely
+
+- During a scan, press `Esc` or `x` to request cancellation.
+- Outside a scan, `Esc` or `h` returns home.
+- `q` or `Ctrl+C` exits Cleanr and restores the terminal.

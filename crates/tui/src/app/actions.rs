@@ -1,0 +1,361 @@
+use super::*;
+
+impl Workbench {
+    pub fn dispatch(&mut self, action: ActionRequest) {
+        match action {
+            ActionRequest::Scan(paths) => self.start_scan(paths),
+            ActionRequest::Review => self.review(),
+            ActionRequest::Plan => self.build_plan(),
+            ActionRequest::Clean { intent } => {
+                let executor = TrashExecutor;
+                self.clean_with_executor(intent, &executor);
+            }
+            ActionRequest::Restore => self.show_restore(),
+            ActionRequest::Rules => self.show_rules(),
+            ActionRequest::Plugins => self.show_plugins(),
+            ActionRequest::Languages => self.show_languages(),
+            ActionRequest::Tasks => self.show_tasks(),
+            ActionRequest::Usage(paths) => self.start_usage_scan(paths),
+            ActionRequest::ExportPlan(path) => self.export_plan(path),
+            ActionRequest::Help => self.show_help(),
+            ActionRequest::Quit => self.should_quit = true,
+        }
+    }
+
+    pub fn clean_with_executor(&mut self, intent: CleanupIntent, executor: &impl CleanupExecutor) {
+        if self.plan.is_none() {
+            self.build_plan();
+        }
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        if plan.summary.selected_count == 0 {
+            self.status = self.i18n.t("status_no_selected_items");
+            return;
+        }
+        let user_authorized = intent != CleanupIntent::AgentRequest;
+        let confirmed = intent == CleanupIntent::ExplicitUserConfirmation
+            || (intent == CleanupIntent::UserRequest && !plan.safety.requires_confirmation);
+        let needs_confirmation =
+            plan.safety.requires_confirmation || intent == CleanupIntent::AgentRequest;
+        if needs_confirmation && !confirmed {
+            self.clean_waiting_for_confirmation = true;
+            self.restore_waiting_for_confirmation = None;
+            self.confirm_choice = ConfirmChoice::No;
+            self.status = self.i18n.format(
+                "status_clean_confirm",
+                &[
+                    ("count", plan.summary.selected_count.to_string()),
+                    ("size", format_bytes(plan.summary.selected_size_bytes)),
+                ],
+            );
+            return;
+        }
+
+        match execute_cleanup(plan, executor, &self.state_dir, user_authorized) {
+            Ok(manifest) => {
+                self.clean_waiting_for_confirmation = false;
+                self.status = self.i18n.format(
+                    "status_cleaned",
+                    &[
+                        ("succeeded", manifest.summary.succeeded.to_string()),
+                        ("failed", manifest.summary.failed.to_string()),
+                        ("run_id", manifest.run_id.clone()),
+                    ],
+                );
+                self.task_log
+                    .push(format!("clean {}", manifest.summary.succeeded));
+                self.refresh_history();
+                self.refresh_roots_after_mutation();
+            }
+            Err(err) => self.status = err.to_string(),
+        }
+    }
+
+    pub(crate) fn submit_confirmation(&mut self) {
+        let confirmed = self.confirm_choice == ConfirmChoice::Yes;
+        let restore_run = self.restore_waiting_for_confirmation.take();
+        let was_restore = restore_run.is_some();
+        let was_clean = self.clean_waiting_for_confirmation;
+        self.clean_waiting_for_confirmation = false;
+        if confirmed {
+            if let Some(run_id) = restore_run {
+                self.restore_run(&run_id);
+            } else if was_clean {
+                self.dispatch(ActionRequest::Clean {
+                    intent: CleanupIntent::ExplicitUserConfirmation,
+                });
+            }
+        } else {
+            self.status = if was_restore {
+                self.i18n.t("status_restore_cancelled")
+            } else {
+                self.i18n.t("status_clean_cancelled")
+            };
+        }
+    }
+
+    pub(crate) fn cancel_confirmation(&mut self) {
+        let was_restore = self.restore_waiting_for_confirmation.take().is_some();
+        self.confirm_choice = ConfirmChoice::No;
+        self.clean_waiting_for_confirmation = false;
+        self.status = if was_restore {
+            self.i18n.t("status_restore_cancelled")
+        } else {
+            self.i18n.t("status_clean_cancelled")
+        };
+    }
+
+    pub(crate) fn confirmation_pending(&self) -> bool {
+        self.clean_waiting_for_confirmation || self.restore_waiting_for_confirmation.is_some()
+    }
+
+    pub(crate) fn request_restore_selected(&mut self) {
+        let idx = self.list_state.selected().unwrap_or(0);
+        let Some(manifest) = self.execution_manifests.get(idx) else {
+            self.status = self.i18n.t("status_no_manifests");
+            return;
+        };
+        let restored = restored_run_ids(&self.restore_manifests).contains(manifest.run_id.as_str());
+        if restored {
+            self.status = self.i18n.t("status_restore_already_done");
+            return;
+        }
+        self.clean_waiting_for_confirmation = false;
+        self.restore_waiting_for_confirmation = Some(manifest.run_id.clone());
+        self.confirm_choice = ConfirmChoice::No;
+        self.status = self.i18n.format(
+            "status_restore_confirm",
+            &[
+                ("run_id", manifest.run_id.clone()),
+                ("count", manifest.summary.succeeded.to_string()),
+            ],
+        );
+    }
+
+    pub(crate) fn restore_run(&mut self, run_id: &str) {
+        let Some(manifest) = self
+            .execution_manifests
+            .iter()
+            .find(|manifest| manifest.run_id == run_id)
+            .cloned()
+        else {
+            self.status = "cleanup run manifest was not found".to_string();
+            return;
+        };
+        match restore_cleanup(&manifest, &self.state_dir) {
+            Ok(restored) => {
+                self.status = self.i18n.format(
+                    "status_restored",
+                    &[
+                        ("succeeded", restored.summary.succeeded.to_string()),
+                        ("failed", restored.summary.failed.to_string()),
+                        ("restore_id", restored.restore_id.clone()),
+                    ],
+                );
+                self.task_log
+                    .push(format!("restore {}", restored.summary.succeeded));
+                self.refresh_history();
+                self.refresh_roots_after_mutation();
+            }
+            Err(err) => self.status = err.to_string(),
+        }
+    }
+
+    pub(crate) fn review(&mut self) {
+        if self.scan_rx.is_some() {
+            self.review_after_scan = true;
+            self.status = self.i18n.t("status_review_after_scan");
+            return;
+        }
+        self.build_plan();
+    }
+
+    pub(crate) fn build_plan(&mut self) {
+        self.build_plan_for_view(true);
+    }
+
+    pub(crate) fn build_plan_for_view(&mut self, activate_scan: bool) {
+        if self.entries.is_empty() {
+            self.status = self.i18n.t("status_no_scan_results");
+            return;
+        }
+        if activate_scan {
+            self.view = View::Scan;
+        }
+        let policy = self.safety_policy();
+        self.plan = Some(build_cleanup_plan_with_policy(
+            self.roots.clone(),
+            self.registry.versions(),
+            &self.entries,
+            &policy,
+        ));
+        if let Some(plan) = &self.plan {
+            self.status = self.i18n.format(
+                "status_plan_ready",
+                &[
+                    ("candidates", plan.summary.candidate_count.to_string()),
+                    ("selected", plan.summary.selected_count.to_string()),
+                    ("size", format_bytes(plan.summary.selected_size_bytes)),
+                ],
+            );
+            if self.view == View::Scan {
+                self.select_first();
+            }
+        }
+    }
+
+    pub(crate) fn safety_policy(&self) -> SafetyPolicy {
+        let mut protected = Vec::new();
+        protected.extend(cleanr_config::home_dir());
+        protected.extend(default_config_path());
+        if let Ok(executable) = std::env::current_exe() {
+            protected.push(executable);
+        }
+        let mut protected_subtrees = vec![self.state_dir.clone()];
+        protected_subtrees.extend(self.config.plugins.dirs.iter().cloned());
+        protected_subtrees.extend(self.config.i18n.dirs.iter().cloned());
+        SafetyPolicy::new(protected, self.config.cleanup.require_confirm)
+            .with_protected_subtrees(protected_subtrees)
+    }
+
+    pub(crate) fn export_plan(&mut self, path: Option<PathBuf>) {
+        if self.plan.is_none() {
+            self.build_plan();
+        }
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        let path = path.unwrap_or_else(|| PathBuf::from("cleanr-plan.json"));
+        match export_cleanup_plan(plan, &path) {
+            Ok(()) => {
+                self.status = self.i18n.format(
+                    "status_exported_plan",
+                    &[("path", path.display().to_string())],
+                );
+            }
+            Err(err) => self.status = err.to_string(),
+        }
+    }
+
+    pub(crate) fn show_restore(&mut self) {
+        self.view = View::Restore;
+        self.refresh_history();
+        match self.execution_manifests.first() {
+            None => {
+                self.status = self.i18n.t("status_no_manifests");
+            }
+            Some(manifest) => {
+                self.status = self.i18n.format(
+                    "status_latest_run",
+                    &[
+                        ("run_id", manifest.run_id.clone()),
+                        ("count", manifest.summary.succeeded.to_string()),
+                        ("message", self.i18n.t("restore_select_hint")),
+                    ],
+                );
+            }
+        }
+        self.reset_list_selection();
+    }
+
+    pub(crate) fn show_rules(&mut self) {
+        self.view = View::Rules;
+        let count = self
+            .registry
+            .packs()
+            .iter()
+            .map(|pack| pack.definition.rules.len())
+            .sum::<usize>();
+        self.status = self.i18n.format(
+            "status_rules",
+            &[
+                ("packs", self.registry.packs().len().to_string()),
+                ("rules", count.to_string()),
+            ],
+        );
+        self.reset_list_selection();
+    }
+
+    pub(crate) fn show_plugins(&mut self) {
+        self.view = View::Plugins;
+        let packs = self
+            .registry
+            .packs()
+            .iter()
+            .map(|pack| format!("{}@{}", pack.definition.id, pack.definition.version))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.status = self.i18n.format("status_plugins", &[("packs", packs)]);
+        self.reset_list_selection();
+    }
+
+    pub(crate) fn show_languages(&mut self) {
+        self.view = View::Languages;
+        let packs = self
+            .i18n
+            .packs()
+            .iter()
+            .map(|pack| format!("{}@{} ({})", pack.id, pack.version, pack.locale))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.status = self.i18n.format(
+            "status_languages",
+            &[("packs", packs), ("locale", self.i18n.locale().to_string())],
+        );
+        self.reset_list_selection();
+    }
+
+    pub(crate) fn show_tasks(&mut self) {
+        self.view = View::Tasks;
+        self.status = if self.task_log.is_empty() {
+            self.i18n.t("status_no_tasks")
+        } else {
+            self.task_log.join(" | ")
+        };
+        self.reset_list_selection();
+    }
+
+    pub(crate) fn show_usage(&mut self) {
+        self.view = View::Usage;
+        let candidates = self.plan.as_ref().map_or_else(
+            || {
+                self.entries
+                    .iter()
+                    .filter(|entry| !entry.rule_hits.is_empty())
+                    .count()
+            },
+            |plan| plan.summary.candidate_count,
+        );
+        let (selected, selected_size) = self.plan.as_ref().map_or((0, 0), |plan| {
+            (
+                plan.summary.selected_count,
+                plan.summary.selected_size_bytes,
+            )
+        });
+        self.status = self.i18n.format(
+            "status_usage",
+            &[
+                ("entries", self.scan_summary.entries_seen.to_string()),
+                ("total", format_bytes(self.scan_summary.total_size_bytes)),
+                ("candidates", candidates.to_string()),
+                ("selected", selected.to_string()),
+                ("size", format_bytes(selected_size)),
+            ],
+        );
+        self.reset_list_selection();
+    }
+
+    pub(crate) fn show_help(&mut self) {
+        self.help_open = true;
+        self.status = self.i18n.t("status_help");
+    }
+
+    pub(crate) fn refresh_roots_after_mutation(&mut self) {
+        if self.scan_rx.is_some() || self.roots.is_empty() {
+            return;
+        }
+        let view = self.view;
+        self.start_scan_for_view(Vec::new(), view);
+    }
+}

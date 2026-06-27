@@ -1,0 +1,22 @@
+{
+  "version.label": {
+    "message": "Next",
+    "description": "The label for version current"
+  },
+  "sidebar.tutorialSidebar.category.Get started": {
+    "message": "开始使用",
+    "description": "The label for category 'Get started' in sidebar 'tutorialSidebar'"
+  },
+  "sidebar.tutorialSidebar.category.Customize": {
+    "message": "自定义",
+    "description": "The label for category 'Customize' in sidebar 'tutorialSidebar'"
+  },
+  "sidebar.tutorialSidebar.category.Help": {
+    "message": "帮助",
+    "description": "The label for category 'Help' in sidebar 'tutorialSidebar'"
+  },
+  "sidebar.tutorialSidebar.category.Project": {
+    "message": "项目",
+    "description": "The label for category 'Project' in sidebar 'tutorialSidebar'"
+  }
+}

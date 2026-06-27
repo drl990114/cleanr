@@ -1,0 +1,38 @@
+id = "builtin-general"
+name = "Built-in general cleanup candidates"
+version = "0.5.0"
+description = "Lower-confidence general cleanup candidates that always require review."
+categories = ["downloads", "logs", "temporary-files"]
+
+[[rules]]
+id = "large-download"
+label = "Large downloaded file"
+category = "downloads"
+match = { path_glob = "**/Downloads/**", min_size = 104857600 }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "Large files in Downloads are often removable after review."
+risk_note = "This may be user data; review carefully before cleaning."
+
+[[rules]]
+id = "large-log"
+label = "Large log file"
+category = "logs"
+match = { extension = "log", min_size = 52428800 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Large log files are common cleanup candidates."
+risk_note = "Logs may be needed for debugging or audit history."
+
+[[rules]]
+id = "temporary-file"
+label = "Temporary file"
+category = "temporary-files"
+match = { extension = "tmp", min_size = 1048576 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Temporary files are often safe to remove after review."
+risk_note = "Review the path before deleting; some applications keep active temp files."

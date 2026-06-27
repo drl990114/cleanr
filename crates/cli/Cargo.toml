@@ -1,0 +1,41 @@
+[package]
+name        = "cleanr-cli"
+description = "Cleanr command-line interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cleanr"
+path = "src/main.rs"
+
+[features]
+default = []
+openai = ["cleanr-tui/openai"]
+ollama = ["cleanr-tui/ollama"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+cleanr-config = { version = "0.5.0", path = "../config" }
+cleanr-core = { version = "0.5.0", path = "../core" }
+cleanr-fs = { version = "0.5.0", path = "../fs" }
+cleanr-i18n = { version = "0.5.0", path = "../i18n" }
+cleanr-plugin-api = { version = "0.5.0", path = "../plugin-api" }
+cleanr-rules = { version = "0.5.0", path = "../rules" }
+cleanr-tasks = { version = "0.5.0", path = "../tasks" }
+cleanr-tui = { version = "0.5.0", path = "../tui" }
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,110 @@
+---
+sidebar_position: 2
+description: 安装 Cleanr，并安全完成第一次扫描、审阅和清理。
+---
+
+# 快速开始
+
+## 1. 安装 Cleanr
+
+选择一种安装方式即可。
+
+### npm
+
+需要 Node.js 18 或更高版本：
+
+```bash
+npm install --global cleanr-cli
+```
+
+npm 包会安装一个轻量启动器，以及与你的操作系统和 CPU 匹配的原生二进制。
+
+### Cargo
+
+需要 Rust 1.94 或更高版本：
+
+```bash
+cargo install cleanr-cli
+```
+
+这个版本包含本地命令解释器。OpenAI 和 Ollama 是可选功能；官方发布的
+预编译版本会包含它们。
+
+### 预编译二进制
+
+从 [GitHub Releases](https://github.com/drl990114/cleanr/releases)
+下载适合当前平台的文件。在 macOS 或 Linux 上，需要赋予执行权限，并将文件
+放到 `PATH` 中的目录。
+
+### 从源码构建
+
+```bash
+git clone https://github.com/drl990114/cleanr.git
+cd cleanr
+cargo build --release --all-features
+```
+
+构建结果位于 `target/release/cleanr`。
+
+## 2. 启动 TUI
+
+在想要检查的目录中运行：
+
+```bash
+cleanr
+```
+
+也可以在启动时指定一个或多个扫描根目录：
+
+```bash
+cleanr ~/projects ~/Downloads
+```
+
+Cleanr 会先打开首页，**不会**在启动时自动扫描或清理任何内容。
+
+## 3. 完成第一次清理
+
+进入 TUI 后：
+
+1. 按 `s` 扫描当前根目录。
+2. 扫描完成后按 `r` 审阅清理候选项。
+3. 使用 `j`/`k` 或方向键移动。
+4. 按 `space` 选择或取消选择。
+5. 按 `c` 检查已选数量和大小，并进入确认。
+6. 选择“是”，再按 `Enter` 将已选项移动到回收站。
+
+随时按 `?` 查看快捷键。扫描过程中按 `Esc` 或 `x` 可以取消。
+
+:::tip 第一次建议保守一些
+
+先扫描单个项目，不要一开始就扫描整个主目录。确认清理前，逐项阅读匹配原因和
+风险说明。
+
+:::
+
+## 扫描已知开发者缓存
+
+按 `/` 打开命令面板，输入以下命令并按 `Enter`：
+
+```text
+/scan --global
+```
+
+它会扫描当前平台上已知的开发者缓存位置，并不代表“扫描整个磁盘”。
+
+## 使用简体中文
+
+初始化内置中文语言文件：
+
+```bash
+cleanr init --locale zh-CN
+```
+
+之后也可以在 TUI 中打开 `/languages`，选择语言并按 `Enter`。选择结果会
+保存到默认配置文件。
+
+## 接下来
+
+- 在[使用 Cleanr](./using-cleanr)中查看全部快捷键和斜杠命令。
+- 在[安全与恢复](./safety-and-recovery)中了解可恢复范围。
+- 在[配置](./configuration)中排除目录或调整主题。

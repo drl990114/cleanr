@@ -1,0 +1,23 @@
+[package]
+name        = "cleanr-fs"
+description = "Filesystem scanning for cleanr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+cleanr-core = { version = "0.5.0", path = "../core" }
+dirs.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
