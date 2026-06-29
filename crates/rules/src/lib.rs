@@ -303,20 +303,16 @@ impl RuleRegistry {
 
     #[must_use]
     pub fn hits_for(&self, entry: &ScanEntry) -> Vec<RuleHit> {
-        let mut candidates = self.generic_rules.iter().copied().collect::<BTreeSet<_>>();
-        if let Some(name) = entry.file_name() {
+        let mut candidates = Vec::with_capacity(self.generic_rules.len() + 4);
+        candidates.extend(self.generic_rules.iter().copied());
+        let file_name = entry.path.file_name().map(|name| name.to_string_lossy());
+        if let Some(name) = file_name.as_deref() {
             if entry.kind == EntryKind::Directory {
-                candidates.extend(
-                    self.dir_name_index
-                        .get(&name)
-                        .into_iter()
-                        .flatten()
-                        .copied(),
-                );
+                candidates.extend(self.dir_name_index.get(name).into_iter().flatten().copied());
             } else {
                 candidates.extend(
                     self.file_name_index
-                        .get(&name)
+                        .get(name)
                         .into_iter()
                         .flatten()
                         .copied(),
@@ -332,6 +328,19 @@ impl RuleRegistry {
                     .copied(),
             );
         }
+        if candidates.len() > 1 {
+            candidates.sort_unstable();
+            candidates.dedup();
+        }
+        let normalized_path = candidates
+            .iter()
+            .any(|(pack_index, rule_index)| {
+                self.packs
+                    .get(*pack_index)
+                    .and_then(|pack| pack.compiled_rules.get(*rule_index))
+                    .is_some_and(|compiled| compiled.path_glob.is_some())
+            })
+            .then(|| normalized_path(&entry.path));
 
         candidates
             .into_iter()
@@ -339,7 +348,14 @@ impl RuleRegistry {
                 let pack = self.packs.get(pack_index)?;
                 let rule = pack.definition.rules.get(rule_index)?;
                 let compiled = pack.compiled_rules.get(rule_index)?;
-                matches_rule(entry, rule, compiled).then(|| RuleHit {
+                matches_rule(
+                    entry,
+                    rule,
+                    compiled,
+                    file_name.as_deref(),
+                    normalized_path.as_deref(),
+                )
+                .then(|| RuleHit {
                     rule_pack_id: pack.definition.id.clone(),
                     rule_id: rule.id.clone(),
                     label: rule.label.clone(),
@@ -533,15 +549,21 @@ impl RuleRegistry {
     }
 }
 
-fn matches_rule(entry: &ScanEntry, rule: &RuleDefinition, compiled: &CompiledRule) -> bool {
+fn matches_rule(
+    entry: &ScanEntry,
+    rule: &RuleDefinition,
+    compiled: &CompiledRule,
+    file_name: Option<&str>,
+    normalized_path: Option<&str>,
+) -> bool {
     let matcher = &rule.matcher;
     if let Some(dir_name) = &matcher.dir_name
-        && (entry.kind != EntryKind::Directory || entry.file_name().as_deref() != Some(dir_name))
+        && (entry.kind != EntryKind::Directory || file_name != Some(dir_name))
     {
         return false;
     }
-    if let Some(file_name) = &matcher.file_name
-        && (entry.kind == EntryKind::Directory || entry.file_name().as_deref() != Some(file_name))
+    if let Some(expected_file_name) = &matcher.file_name
+        && (entry.kind == EntryKind::Directory || file_name != Some(expected_file_name.as_str()))
     {
         return false;
     }
@@ -568,7 +590,9 @@ fn matches_rule(entry: &ScanEntry, rule: &RuleDefinition, compiled: &CompiledRul
         }
     }
     if let Some(matcher) = &compiled.path_glob {
-        let path = normalized_path(&entry.path);
+        let Some(path) = normalized_path else {
+            return false;
+        };
         if !matcher.is_match(path) {
             return false;
         }

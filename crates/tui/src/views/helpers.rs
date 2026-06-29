@@ -50,6 +50,71 @@ pub(crate) fn compact_path(path: &std::path::Path, roots: &[PathBuf]) -> String 
         )
 }
 
+pub(crate) fn compact_path_for_width(
+    path: &std::path::Path,
+    roots: &[PathBuf],
+    max_width: usize,
+) -> String {
+    truncate_text(&compact_path(path, roots), max_width)
+}
+
+pub(crate) fn truncate_text(text: &str, max_width: usize) -> String {
+    let current_width = display_width(text);
+    if current_width <= max_width {
+        return text.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let marker = "…";
+    let marker_width = display_width(marker);
+    if max_width <= marker_width {
+        return marker.to_string();
+    }
+
+    let budget = max_width.saturating_sub(marker_width);
+    let head_width = budget / 2;
+    let tail_width = budget.saturating_sub(head_width);
+    format!(
+        "{}{marker}{}",
+        take_width_from_start(text, head_width),
+        take_width_from_end(text, tail_width)
+    )
+}
+
+pub(crate) fn display_width(text: &str) -> usize {
+    Line::from(text.to_string()).width()
+}
+
+fn take_width_from_start(text: &str, max_width: usize) -> String {
+    let mut width = 0usize;
+    let mut result = String::new();
+    for ch in text.chars() {
+        let char_width = display_width(&ch.to_string());
+        if width.saturating_add(char_width) > max_width {
+            break;
+        }
+        width = width.saturating_add(char_width);
+        result.push(ch);
+    }
+    result
+}
+
+fn take_width_from_end(text: &str, max_width: usize) -> String {
+    let mut width = 0usize;
+    let mut result = Vec::new();
+    for ch in text.chars().rev() {
+        let char_width = display_width(&ch.to_string());
+        if width.saturating_add(char_width) > max_width {
+            break;
+        }
+        width = width.saturating_add(char_width);
+        result.push(ch);
+    }
+    result.into_iter().rev().collect()
+}
+
 pub(crate) fn kind_label(kind: EntryKind) -> &'static str {
     match kind {
         EntryKind::Directory => "directory",

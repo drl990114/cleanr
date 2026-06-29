@@ -71,16 +71,29 @@ pub(crate) fn render_status(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
             hints.extend(key_hint("esc", app.i18n.t("hint_close"), app.theme));
         }
         Mode::Normal => {
-            if app.view == View::Home {
+            if app.is_scan_running() {
+                hints.extend(key_hint("esc/x", app.i18n.t("hint_cancel"), app.theme));
+            } else if app.view == View::Home {
                 hints.extend(key_hint("s", app.i18n.t("hint_scan"), app.theme));
                 hints.extend(key_hint("u", app.i18n.t("hint_usage"), app.theme));
+            } else if app.view == View::Scan {
+                if app.list_len() > 0 {
+                    hints.extend(key_hint("j/k", app.i18n.t("hint_move"), app.theme));
+                    hints.extend(key_hint("space", app.i18n.t("hint_select"), app.theme));
+                    if app.plan.is_some() && area.width >= 88 {
+                        hints.extend(key_hint("i", app.i18n.t("hint_inspect"), app.theme));
+                    }
+                    if app.plan.is_some() && area.width >= 104 {
+                        hints.extend(key_hint("a", app.i18n.t("hint_all"), app.theme));
+                    }
+                    if app.plan.is_some() && area.width >= 96 {
+                        hints.extend(key_hint("c", app.i18n.t("hint_clean"), app.theme));
+                    }
+                }
             } else if app.list_len() > 0 {
                 hints.extend(key_hint("j/k", app.i18n.t("hint_move"), app.theme));
-            }
-            if app.view == View::Scan {
-                hints.extend(key_hint("space", app.i18n.t("hint_select"), app.theme));
-                if area.width >= 96 {
-                    hints.extend(key_hint("c", app.i18n.t("hint_clean"), app.theme));
+                if matches!(app.view, View::Languages | View::Restore) {
+                    hints.extend(key_hint("enter", app.i18n.t("hint_select"), app.theme));
                 }
             }
             hints.extend(key_hint("/", app.i18n.t("hint_commands"), app.theme));
@@ -101,6 +114,10 @@ pub(crate) fn render_status(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
                 ScanPhase::Discovering => app.i18n.format(
                     "scan_progress_discovered",
                     &[("total", value.entries_total.to_string())],
+                ),
+                ScanPhase::Scanning if value.entries_total == 0 => app.i18n.format(
+                    "scan_progress_unbounded",
+                    &[("scanned", value.entries_scanned.to_string())],
                 ),
                 ScanPhase::Scanning => app.i18n.format(
                     "scan_progress_count",

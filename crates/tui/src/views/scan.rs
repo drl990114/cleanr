@@ -27,7 +27,7 @@ pub(crate) fn render_scan_progress(
     app: &Workbench,
     title: String,
 ) {
-    let mut panel_area = bounded_content_rect(area, 96, 9);
+    let mut panel_area = bounded_content_rect(area, 104, 7);
     if area.height > panel_area.height {
         panel_area.y = panel_area.y.saturating_add(1);
     }
@@ -46,10 +46,25 @@ pub(crate) fn render_scan_progress(
 
     let progress = app.scan_progress.as_ref();
     let phase = progress.map_or(ScanPhase::Discovering, |value| value.phase);
-    let spinner = spinner_frame(app.animation_tick);
+    let (bar, progress_label) = scan_progress_display(progress, app);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let heading = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(rows[0]);
     let phase_line = Line::from(vec![
         Span::styled(
-            format!("{spinner} "),
+            format!("{} ", spinner_frame(app.animation_tick)),
             Style::default()
                 .fg(app.theme.warn)
                 .add_modifier(Modifier::BOLD),
@@ -61,65 +76,23 @@ pub(crate) fn render_scan_progress(
                 .add_modifier(Modifier::BOLD),
         ),
     ]);
-
-    let (ratio, gauge_label) = progress.map_or((0.0, String::new()), |value| match value.phase {
-        ScanPhase::Discovering => (
-            ((app.animation_tick % 20) as f64 / 20.0).clamp(0.05, 0.95),
-            app.i18n.format(
-                "scan_progress_discovered",
-                &[("total", value.entries_total.to_string())],
-            ),
-        ),
-        ScanPhase::Scanning => {
-            let ratio = if value.entries_total == 0 {
-                ((app.animation_tick % 20) as f64 / 20.0).clamp(0.05, 0.95)
-            } else {
-                value.entries_scanned as f64 / value.entries_total as f64
-            };
-            (
-                ratio.clamp(0.0, 1.0),
-                if value.entries_total == 0 {
-                    app.i18n.format(
-                        "scan_progress_unbounded",
-                        &[("scanned", value.entries_scanned.to_string())],
-                    )
-                } else {
-                    app.i18n.format(
-                        "scan_progress_count",
-                        &[
-                            ("scanned", value.entries_scanned.to_string()),
-                            ("total", value.entries_total.to_string()),
-                        ],
-                    )
-                },
-            )
-        }
-        ScanPhase::Aggregating => (1.0, app.i18n.t("scan_progress_aggregating")),
-    });
-
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Length(1),
-        ])
-        .split(inner);
     frame.render_widget(
-        Paragraph::new(phase_line).alignment(ratatui::layout::Alignment::Center),
-        rows[0],
+        Paragraph::new(phase_line).alignment(ratatui::layout::Alignment::Left),
+        heading[0],
     );
     frame.render_widget(
-        Gauge::default()
-            .ratio(ratio)
-            .label(gauge_label)
-            .gauge_style(
-                Style::default()
-                    .fg(app.theme.accent)
-                    .bg(app.theme.surface_alt),
-            ),
+        Paragraph::new(progress_label)
+            .style(Style::default().fg(app.theme.fg_dim))
+            .alignment(ratatui::layout::Alignment::Right),
+        heading[1],
+    );
+    frame.render_widget(
+        Paragraph::new(progress_bar_line(
+            bar,
+            rows[1].width as usize,
+            app.animation_tick,
+            app.theme,
+        )),
         rows[1],
     );
 
@@ -138,7 +111,7 @@ pub(crate) fn render_scan_progress(
     frame.render_widget(
         Paragraph::new(stats)
             .style(Style::default().fg(app.theme.fg_dim))
-            .alignment(ratatui::layout::Alignment::Center),
+            .alignment(ratatui::layout::Alignment::Left),
         rows[2],
     );
 
@@ -154,24 +127,141 @@ pub(crate) fn render_scan_progress(
             },
             |path| path.display().to_string(),
         );
+    let current_path_label = format!("{}  ", app.i18n.t("scan_current_path"));
+    let current_path_width = rows[3]
+        .width
+        .saturating_sub(u16::try_from(display_width(&current_path_label)).unwrap_or(u16::MAX))
+        as usize;
+    let current_path = truncate_text(&current_path, current_path_width);
     frame.render_widget(
         Paragraph::new(vec![Line::from(vec![
-            Span::styled(
-                format!("{}  ", app.i18n.t("scan_current_path")),
-                Style::default().fg(app.theme.fg_dim),
-            ),
+            Span::styled(current_path_label, Style::default().fg(app.theme.fg_dim)),
             Span::styled(current_path, Style::default().fg(app.theme.fg)),
         ])])
-        .alignment(ratatui::layout::Alignment::Center)
+        .alignment(ratatui::layout::Alignment::Left)
         .wrap(Wrap { trim: true }),
         rows[3],
     );
     frame.render_widget(
         Paragraph::new(app.i18n.t("scan_cancel_hint"))
             .style(Style::default().fg(app.theme.fg_dim))
-            .alignment(ratatui::layout::Alignment::Center),
+            .alignment(ratatui::layout::Alignment::Right),
         rows[4],
     );
+}
+
+fn scan_progress_display(
+    progress: Option<&cleanr_fs::ScanProgress>,
+    app: &Workbench,
+) -> (ProgressBar, String) {
+    progress.map_or_else(
+        || (ProgressBar::Activity, app.i18n.t("scan_preparing")),
+        |value| match value.phase {
+            ScanPhase::Discovering => (
+                ProgressBar::Activity,
+                app.i18n.format(
+                    "scan_progress_discovered",
+                    &[("total", value.entries_total.to_string())],
+                ),
+            ),
+            ScanPhase::Scanning => {
+                let bar = if value.entries_total == 0 {
+                    ProgressBar::Activity
+                } else {
+                    ProgressBar::Determinate(
+                        (value.entries_scanned as f64 / value.entries_total as f64).clamp(0.0, 1.0),
+                    )
+                };
+                (
+                    bar,
+                    if value.entries_total == 0 {
+                        app.i18n.format(
+                            "scan_progress_unbounded",
+                            &[("scanned", value.entries_scanned.to_string())],
+                        )
+                    } else {
+                        app.i18n.format(
+                            "scan_progress_count",
+                            &[
+                                ("scanned", value.entries_scanned.to_string()),
+                                ("total", value.entries_total.to_string()),
+                            ],
+                        )
+                    },
+                )
+            }
+            ScanPhase::Aggregating => (
+                ProgressBar::Determinate(0.96),
+                app.i18n.t("scan_progress_aggregating"),
+            ),
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ProgressBar {
+    Determinate(f64),
+    Activity,
+}
+
+fn progress_bar_line(
+    progress: ProgressBar,
+    width: usize,
+    animation_tick: u64,
+    theme: Theme,
+) -> Line<'static> {
+    if width == 0 {
+        return Line::from("");
+    }
+    match progress {
+        ProgressBar::Determinate(ratio) => {
+            let ratio = ratio.clamp(0.0, 1.0);
+            let filled = ((width as f64) * ratio).round() as usize;
+            let filled = if ratio > 0.0 { filled.max(1) } else { filled }.min(width);
+            let empty = width.saturating_sub(filled);
+            Line::from(vec![
+                Span::styled(
+                    "━".repeat(filled),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("─".repeat(empty), Style::default().fg(theme.surface_alt)),
+            ])
+        }
+        ProgressBar::Activity => {
+            let pulse = (width / 6).clamp(6, 16).min(width);
+            let max_start = width.saturating_sub(pulse);
+            let start = if max_start == 0 {
+                0
+            } else {
+                (animation_tick as usize) % (max_start + 1)
+            };
+            let end = start.saturating_add(pulse).min(width);
+            Line::from(vec![
+                Span::styled("─".repeat(start), Style::default().fg(theme.surface_alt)),
+                Span::styled(
+                    "━".repeat(end.saturating_sub(start)),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "─".repeat(width.saturating_sub(end)),
+                    Style::default().fg(theme.surface_alt),
+                ),
+            ])
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn unbounded_scan_progress_ratio(entries_seen: usize) -> f64 {
+    if entries_seen == 0 {
+        return 0.03;
+    }
+    let entries_seen = entries_seen as f64;
+    (entries_seen / (entries_seen + 512.0)).clamp(0.05, 0.92)
 }
 
 pub(crate) fn render_candidates(
@@ -180,39 +270,17 @@ pub(crate) fn render_candidates(
     app: &mut Workbench,
     wide: bool,
 ) {
+    let content_width = candidate_content_width(area, wide);
     let items: Vec<ListItem> = if let Some(plan) = &app.plan {
         plan.items
             .iter()
             .map(|item| {
-                let check = if item.selected {
-                    Span::styled("[✓]", Style::default().fg(app.theme.ok))
-                } else {
-                    Span::styled("[ ]", Style::default().fg(app.theme.fg_dim))
-                };
-                let size = Span::styled(
-                    format!("{:>9} ", format_bytes(item.size_bytes)),
-                    Style::default().fg(app.theme.cyan),
-                );
-                let icon =
-                    Span::styled(kind_icon(item.kind), Style::default().fg(app.theme.accent));
-                let path = Span::raw(compact_path(&item.path, &app.roots));
-                let label = Span::styled(
-                    format!("  · {}", item.category),
-                    Style::default().fg(app.theme.fg_dim),
-                );
-                let conf = Span::styled(
-                    format!(" {:?}", item.confidence).to_lowercase(),
-                    Style::default().fg(confidence_color(item.confidence, app.theme)),
-                );
-                ListItem::new(Line::from(vec![
-                    check,
-                    Span::raw(" "),
-                    size,
-                    icon,
-                    path,
-                    label,
-                    conf,
-                ]))
+                ListItem::new(plan_candidate_line(
+                    item,
+                    &app.roots,
+                    app.theme,
+                    content_width,
+                ))
             })
             .collect()
     } else {
@@ -220,30 +288,12 @@ pub(crate) fn render_candidates(
             .iter()
             .filter(|entry| !entry.rule_hits.is_empty())
             .map(|entry| {
-                let hit = &entry.rule_hits[0];
-                let size = Span::styled(
-                    format!("{:>9} ", format_bytes(entry.size_bytes)),
-                    Style::default().fg(app.theme.cyan),
-                );
-                let icon =
-                    Span::styled(kind_icon(entry.kind), Style::default().fg(app.theme.accent));
-                let path = Span::raw(compact_path(&entry.path, &app.roots));
-                let label = Span::styled(
-                    format!("  · {}", hit.label),
-                    Style::default().fg(app.theme.fg_dim),
-                );
-                let conf = Span::styled(
-                    format!(" {:?}", hit.confidence).to_lowercase(),
-                    Style::default().fg(confidence_color(hit.confidence, app.theme)),
-                );
-                ListItem::new(Line::from(vec![
-                    Span::raw("  "),
-                    size,
-                    icon,
-                    path,
-                    label,
-                    conf,
-                ]))
+                ListItem::new(scan_candidate_line(
+                    entry,
+                    &app.roots,
+                    app.theme,
+                    content_width,
+                ))
             })
             .collect()
     };
@@ -274,29 +324,124 @@ pub(crate) fn render_candidates(
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
 
+fn candidate_content_width(area: Rect, wide: bool) -> usize {
+    let right_border = if wide { 1 } else { 0 };
+    area.width
+        .saturating_sub(right_border)
+        .saturating_sub(2)
+        .into()
+}
+
+fn plan_candidate_line(
+    item: &CleanupItem,
+    roots: &[PathBuf],
+    theme: Theme,
+    content_width: usize,
+) -> Line<'static> {
+    let check_text = if item.selected { "[✓]" } else { "[ ]" };
+    let check = if item.selected {
+        Span::styled(check_text, Style::default().fg(theme.ok))
+    } else {
+        Span::styled(check_text, Style::default().fg(theme.fg_dim))
+    };
+    let size_text = size_cell(item.size_bytes);
+    let icon_text = kind_icon(item.kind);
+    let label_text = format!("  · {}", item.category);
+    let confidence_text = format!(" {}", confidence_label(item.confidence));
+    let fixed_width = display_width(check_text)
+        + 1
+        + display_width(&size_text)
+        + display_width(icon_text)
+        + display_width(&label_text)
+        + display_width(&confidence_text);
+    let path_width = content_width.saturating_sub(fixed_width);
+
+    Line::from(vec![
+        check,
+        Span::raw(" "),
+        Span::styled(size_text, Style::default().fg(theme.cyan)),
+        Span::styled(icon_text, Style::default().fg(theme.accent)),
+        Span::raw(compact_path_for_width(&item.path, roots, path_width)),
+        Span::styled(label_text, Style::default().fg(theme.fg_dim)),
+        Span::styled(
+            confidence_text,
+            Style::default().fg(confidence_color(item.confidence, theme)),
+        ),
+    ])
+}
+
+fn scan_candidate_line(
+    entry: &ScanEntry,
+    roots: &[PathBuf],
+    theme: Theme,
+    content_width: usize,
+) -> Line<'static> {
+    let hit = &entry.rule_hits[0];
+    let size_text = size_cell(entry.size_bytes);
+    let icon_text = kind_icon(entry.kind);
+    let label_text = format!("  · {}", hit.label);
+    let confidence_text = format!(" {}", confidence_label(hit.confidence));
+    let fixed_width = 2
+        + display_width(&size_text)
+        + display_width(icon_text)
+        + display_width(&label_text)
+        + display_width(&confidence_text);
+    let path_width = content_width.saturating_sub(fixed_width);
+
+    Line::from(vec![
+        Span::raw("  "),
+        Span::styled(size_text, Style::default().fg(theme.cyan)),
+        Span::styled(icon_text, Style::default().fg(theme.accent)),
+        Span::raw(compact_path_for_width(&entry.path, roots, path_width)),
+        Span::styled(label_text, Style::default().fg(theme.fg_dim)),
+        Span::styled(
+            confidence_text,
+            Style::default().fg(confidence_color(hit.confidence, theme)),
+        ),
+    ])
+}
+
+fn size_cell(bytes: u64) -> String {
+    format!("{:>10} ", format_bytes(bytes))
+}
+
+fn confidence_label(confidence: Confidence) -> &'static str {
+    match confidence {
+        Confidence::High => "high",
+        Confidence::Medium => "medium",
+        Confidence::Low => "low",
+    }
+}
+
 pub(crate) fn render_preview(frame: &mut Frame<'_>, area: Rect, app: &Workbench) {
     let mut lines: Vec<Line> = Vec::new();
+    let inner_width = area.width.saturating_sub(2) as usize;
 
     if let Some(plan) = &app.plan {
         let selected_size = format_bytes(plan.summary.selected_size_bytes);
-        lines.push(Line::from(vec![Span::styled(
-            app.i18n.format(
-                "plan_candidates",
-                &[("count", plan.summary.candidate_count.to_string())],
+        lines.push(Line::from(vec![
+            Span::styled(
+                app.i18n.format(
+                    "plan_candidates",
+                    &[("count", plan.summary.candidate_count.to_string())],
+                ),
+                Style::default().fg(app.theme.fg_dim),
             ),
-            Style::default().fg(app.theme.fg),
-        )]));
-        lines.push(Line::from(vec![Span::styled(
-            app.i18n.format(
-                "plan_selected",
-                &[("count", plan.summary.selected_count.to_string())],
+            Span::styled("  ·  ", Style::default().fg(app.theme.border)),
+            Span::styled(
+                app.i18n.format(
+                    "plan_selected",
+                    &[("count", plan.summary.selected_count.to_string())],
+                ),
+                Style::default().fg(app.theme.ok),
             ),
-            Style::default().fg(app.theme.ok),
-        )]));
+        ]));
         lines.push(Line::from(vec![Span::styled(
             app.i18n
                 .format("plan_selected_size", &[("size", selected_size)]),
-            Style::default().fg(app.theme.cyan),
+            Style::default()
+                .fg(app.theme.cyan)
+                .add_modifier(Modifier::BOLD),
         )]));
         lines.push(Line::from(""));
 
@@ -304,48 +449,45 @@ pub(crate) fn render_preview(frame: &mut Frame<'_>, area: Rect, app: &Workbench)
             && let Some(item) = plan.items.get(idx)
         {
             lines.push(Line::from(vec![Span::styled(
-                "Path",
+                app.i18n.t("plan_current_item"),
                 Style::default()
                     .fg(app.theme.accent)
                     .add_modifier(Modifier::BOLD),
             )]));
-            lines.push(Line::from(item.path.display().to_string()));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Size",
-                    Style::default()
-                        .fg(app.theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(": {}", format_bytes(item.size_bytes))),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Rule",
-                    Style::default()
-                        .fg(app.theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(": {}", item.rule_id)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Reason",
-                    Style::default()
-                        .fg(app.theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(": {}", item.reason)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Risk",
-                    Style::default()
-                        .fg(app.theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(": {}", item.risk_note)),
-            ]));
+            let path_label = app.i18n.t("detail_path");
+            let path_width = inner_width
+                .saturating_sub(display_width(&path_label))
+                .saturating_sub(2);
+            lines.push(preview_field(
+                path_label,
+                truncate_text(&item.path.display().to_string(), path_width),
+                app.theme.fg,
+                app.theme,
+            ));
+            lines.push(preview_field(
+                app.i18n.t("detail_size"),
+                format_bytes(item.size_bytes),
+                app.theme.cyan,
+                app.theme,
+            ));
+            lines.push(preview_field(
+                app.i18n.t("detail_rule"),
+                item.rule_id.clone(),
+                app.theme.fg,
+                app.theme,
+            ));
+            lines.push(preview_field(
+                app.i18n.t("detail_reason"),
+                item.reason.clone(),
+                app.theme.fg,
+                app.theme,
+            ));
+            lines.push(preview_field(
+                app.i18n.t("detail_risk"),
+                item.risk_note.clone(),
+                app.theme.warn,
+                app.theme,
+            ));
             lines.push(Line::from(""));
         }
 
@@ -378,6 +520,19 @@ pub(crate) fn render_preview(frame: &mut Frame<'_>, area: Rect, app: &Workbench)
             ),
     );
     frame.render_widget(paragraph, area);
+}
+
+fn preview_field(label: String, value: String, value_color: Color, theme: Theme) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            label,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(": "),
+        Span::styled(value, Style::default().fg(value_color)),
+    ])
 }
 
 pub(crate) fn render_insight(frame: &mut Frame<'_>, area: Rect, app: &Workbench) {

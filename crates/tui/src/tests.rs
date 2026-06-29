@@ -4,7 +4,8 @@ use crate::{
     commands::palette_command_invocation,
     views::{
         bottom_bounded_rect, bounded_content_rect, centered_bounded_rect, command_cursor_position,
-        ime_guard_position, render, usage_descendant_count,
+        display_width, ime_guard_position, render, truncate_text, unbounded_scan_progress_ratio,
+        usage_descendant_count,
     },
 };
 use cleanr_agent::{ActionRequest, CleanupIntent};
@@ -14,7 +15,7 @@ use cleanr_core::{
     ExecutionStatus, ExecutionSummary, PlannedAction, RollbackReceipt, RuleHit, RuleTrust,
     ScanEntry,
 };
-use cleanr_fs::{ScanOptions, scan_paths};
+use cleanr_fs::{ScanOptions, ScanPhase, ScanProgress, scan_paths};
 use cleanr_i18n::{I18n, builtin_language_packs};
 use cleanr_rules::RuleRegistry;
 use cleanr_tasks::{FakeTrashExecutor, write_execution_manifest};
@@ -219,6 +220,114 @@ fn scan_layout_keeps_selection_and_details_distinct() {
     assert!(screen.contains("[✓]"));
     assert!(screen.contains("Preview"));
     assert!(screen.contains("space select"));
+    assert!(screen.contains("Current item"));
+    assert!(screen.contains("i inspect"));
+}
+
+#[test]
+fn scan_layout_truncates_long_paths_without_hiding_decision_columns() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    app.entries = vec![ScanEntry {
+        path: temp
+            .path()
+            .join("very-long-generated-directory-name")
+            .join("nested-cache")
+            .join("another-long-segment")
+            .join("artifact.bin"),
+        kind: EntryKind::Directory,
+        size_bytes: 12 * 1024 * 1024 * 1024,
+        modified_at: None,
+        rule_hits: vec![test_rule_hit("generated")],
+    }];
+    app.build_plan();
+
+    let screen = render_text(&mut app, 76, 22);
+    println!("{screen}");
+
+    assert!(screen.contains("[✓]"));
+    assert!(screen.contains("12.00 GiB"));
+    assert!(screen.contains("high"));
+    assert!(screen.contains("…"));
+}
+
+#[test]
+fn chinese_scan_layout_uses_translations_for_insight_and_preview_labels() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = Workbench::new(
+        vec![temp.path().to_path_buf()],
+        Config::default(),
+        RuleRegistry::builtin().expect("builtin rules"),
+        I18n::new("zh-CN", BTreeMap::new(), builtin_language_packs()),
+        Theme::dark(),
+    )
+    .expect("create workbench");
+    app.entries = vec![ScanEntry {
+        path: temp.path().join("target"),
+        kind: EntryKind::Directory,
+        size_bytes: 1024 * 1024,
+        modified_at: None,
+        rule_hits: vec![test_rule_hit("generated")],
+    }];
+    app.build_plan();
+
+    let screen = render_text(&mut app, 120, 24);
+    println!("{screen}");
+    let compact = screen
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+
+    assert!(compact.contains("解析"));
+    assert!(compact.contains("当前项"));
+    assert!(compact.contains("路径"));
+    assert!(!compact.contains("label_insight"));
+    assert!(!compact.contains("insight_empty"));
+}
+
+#[test]
+fn chinese_scan_progress_uses_refined_thin_rail_layout() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = Workbench::new(
+        vec![temp.path().to_path_buf()],
+        Config::default(),
+        RuleRegistry::builtin().expect("builtin rules"),
+        I18n::new("zh-CN", BTreeMap::new(), builtin_language_packs()),
+        Theme::light(),
+    )
+    .expect("create workbench");
+    app.dispatch(ActionRequest::Scan(Vec::new()));
+    app.scan_progress = Some(ScanProgress {
+        phase: ScanPhase::Scanning,
+        entries_total: 0,
+        entries_scanned: 155_840,
+        bytes_scanned: (12.74 * 1024.0 * 1024.0 * 1024.0) as u64,
+        errors: 0,
+        current_path: Some(
+            temp.path()
+                .join("node_modules")
+                .join("@babel")
+                .join("traverse")
+                .join("lib")
+                .join("context.js"),
+        ),
+    });
+
+    let screen = render_text(&mut app, 111, 33);
+    println!("{screen}");
+    let compact = screen
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+
+    assert!(compact.contains("正在扫描文件"));
+    assert!(compact.contains("已扫描155840个条目"));
+    assert!(compact.contains("已读取12.74GiB"));
+    assert!(compact.contains("当前路径"));
+    assert!(screen.contains('━'));
+    assert!(screen.contains('─'));
+    assert!(!screen.contains('█'));
+    assert!(!screen.contains("155840 / 0"));
 }
 
 #[test]
@@ -584,6 +693,24 @@ fn command_cursor_accounts_for_wide_chinese_input() {
         command_cursor_position(area, ":中文"),
         Some(Position::new(8, 20))
     );
+}
+
+#[test]
+fn text_truncation_respects_terminal_display_width() {
+    let text = "缓存/very-long-directory-name/target";
+    let truncated = truncate_text(text, 12);
+
+    assert!(truncated.contains('…'));
+    assert!(display_width(&truncated) <= 12);
+}
+
+#[test]
+fn unbounded_scan_progress_is_monotonic_and_never_reports_done() {
+    let samples = [0, 1, 64, 512, 4096, 65_536].map(unbounded_scan_progress_ratio);
+
+    assert!(samples.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert_eq!(samples[0], 0.03);
+    assert!(samples[samples.len() - 1] < 1.0);
 }
 
 #[test]

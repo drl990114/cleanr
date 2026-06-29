@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -13,7 +14,6 @@ use cleanr_config::Config;
 use cleanr_plugin_api::{
     PluginCapability, PluginDiagnostic, PluginDiscovery, discover_bundles, sorted_dir_entries,
 };
-use rust_i18n::t;
 use serde::Deserialize;
 use serde_yaml::Value;
 use sha2::{Digest, Sha256};
@@ -623,186 +623,33 @@ fn locale_from_env() -> Option<String> {
 }
 
 fn builtin_t(locale: &str, key: &str) -> String {
-    macro_rules! tr {
-        ($literal:literal) => {
-            t!($literal, locale = locale).to_string()
-        };
-    }
+    builtin_messages(locale)
+        .get(key)
+        .cloned()
+        .or_else(|| builtin_messages(FALLBACK_LOCALE).get(key).cloned())
+        .unwrap_or_else(|| key.to_string())
+}
 
-    match key {
-        "status_ready" => tr!("status_ready"),
-        "status_update_available" => tr!("status_update_available"),
-        "status_home" => tr!("status_home"),
-        "status_queued" => tr!("status_queued"),
-        "status_plain_language_scan_review" => tr!("status_plain_language_scan_review"),
-        "status_plain_language_help" => tr!("status_plain_language_help"),
-        "status_no_selected_items" => tr!("status_no_selected_items"),
-        "status_clean_confirm" => tr!("status_clean_confirm"),
-        "status_clean_cancelled" => tr!("status_clean_cancelled"),
-        "status_cleaned" => tr!("status_cleaned"),
-        "status_restore_confirm" => tr!("status_restore_confirm"),
-        "status_restore_cancelled" => tr!("status_restore_cancelled"),
-        "status_restore_already_done" => tr!("status_restore_already_done"),
-        "status_restored" => tr!("status_restored"),
-        "status_scan_finished" => tr!("status_scan_finished"),
-        "status_scan_disconnected" => tr!("status_scan_disconnected"),
-        "status_scan_already_running" => tr!("status_scan_already_running"),
-        "status_scan_cancelling" => tr!("status_scan_cancelling"),
-        "status_scan_cancelled" => tr!("status_scan_cancelled"),
-        "status_no_global_caches" => tr!("status_no_global_caches"),
-        "status_scanning" => tr!("status_scanning"),
-        "status_scan_progress" => tr!("status_scan_progress"),
-        "status_scan_progress_unbounded" => tr!("status_scan_progress_unbounded"),
-        "status_scan_started" => tr!("status_scan_started"),
-        "status_scan_log" => tr!("status_scan_log"),
-        "status_review_after_scan" => tr!("status_review_after_scan"),
-        "status_no_scan_results" => tr!("status_no_scan_results"),
-        "status_plan_ready" => tr!("status_plan_ready"),
-        "status_exported_plan" => tr!("status_exported_plan"),
-        "status_no_manifests" => tr!("status_no_manifests"),
-        "status_latest_run" => tr!("status_latest_run"),
-        "status_rules" => tr!("status_rules"),
-        "status_plugins" => tr!("status_plugins"),
-        "status_languages" => tr!("status_languages"),
-        "status_language_switched" => tr!("status_language_switched"),
-        "status_no_tasks" => tr!("status_no_tasks"),
-        "status_usage" => tr!("status_usage"),
-        "status_select_scan_only" => tr!("status_select_scan_only"),
-        "status_help" => tr!("status_help"),
-        "status_all_toggled_selected" => tr!("status_all_toggled_selected"),
-        "status_all_toggled_deselected" => tr!("status_all_toggled_deselected"),
-        "label_status" => tr!("label_status"),
-        "label_roots" => tr!("label_roots"),
-        "label_candidates" => tr!("label_candidates"),
-        "label_scan_tree" => tr!("label_scan_tree"),
-        "label_cleanup_plan" => tr!("label_cleanup_plan"),
-        "label_command" => tr!("label_command"),
-        "label_slash_commands" => tr!("label_slash_commands"),
-        "label_safety" => tr!("label_safety"),
-        "label_preview" => tr!("label_preview"),
-        "label_home" => tr!("label_home"),
-        "label_dashboard" => tr!("label_dashboard"),
-        "label_languages" => tr!("label_languages"),
-        "home_overview" => tr!("home_overview"),
-        "label_rules" => tr!("label_rules"),
-        "label_plugins" => tr!("label_plugins"),
-        "label_tasks" => tr!("label_tasks"),
-        "label_usage" => tr!("label_usage"),
-        "label_restore" => tr!("label_restore"),
-        "label_details" => tr!("label_details"),
-        "label_mode_normal" => tr!("label_mode_normal"),
-        "label_mode_command" => tr!("label_mode_command"),
-        "label_help" => tr!("label_help"),
-        "home_welcome" => tr!("home_welcome"),
-        "home_subtitle" => tr!("home_subtitle"),
-        "home_roots" => tr!("home_roots"),
-        "home_hint" => tr!("home_hint"),
-        "home_no_scan" => tr!("home_no_scan"),
-        "home_last_scan" => tr!("home_last_scan"),
-        "home_plan_ready" => tr!("home_plan_ready"),
-        "home_plan_waiting" => tr!("home_plan_waiting"),
-        "home_quick_commands" => tr!("home_quick_commands"),
-        "home_action_scan" => tr!("home_action_scan"),
-        "home_action_usage" => tr!("home_action_usage"),
-        "home_action_more" => tr!("home_action_more"),
-        "home_action_review" => tr!("home_action_review"),
-        "home_action_rescan" => tr!("home_action_rescan"),
-        "home_safety_note" => tr!("home_safety_note"),
-        "home_result_title" => tr!("home_result_title"),
-        "home_result_empty" => tr!("home_result_empty"),
-        "home_result_scanned" => tr!("home_result_scanned"),
-        "home_result_reclaimable" => tr!("home_result_reclaimable"),
-        "home_result_candidates" => tr!("home_result_candidates"),
-        "home_result_selected" => tr!("home_result_selected"),
-        "home_session" => tr!("home_session"),
-        "home_recent_activity" => tr!("home_recent_activity"),
-        "home_recent_empty" => tr!("home_recent_empty"),
-        "language_home_hint" => tr!("language_home_hint"),
-        "plugins_context_hint" => tr!("plugins_context_hint"),
-        "usage_context_hint" => tr!("usage_context_hint"),
-        "usage_overview" => tr!("usage_overview"),
-        "usage_metric_total" => tr!("usage_metric_total"),
-        "usage_metric_entries" => tr!("usage_metric_entries"),
-        "usage_metric_candidates" => tr!("usage_metric_candidates"),
-        "usage_metric_selected" => tr!("usage_metric_selected"),
-        "scan_phase_discovering" => tr!("scan_phase_discovering"),
-        "scan_phase_scanning" => tr!("scan_phase_scanning"),
-        "scan_phase_aggregating" => tr!("scan_phase_aggregating"),
-        "scan_progress_discovered" => tr!("scan_progress_discovered"),
-        "scan_progress_count" => tr!("scan_progress_count"),
-        "scan_progress_unbounded" => tr!("scan_progress_unbounded"),
-        "scan_progress_aggregating" => tr!("scan_progress_aggregating"),
-        "scan_progress_stats" => tr!("scan_progress_stats"),
-        "scan_preparing" => tr!("scan_preparing"),
-        "scan_current_path" => tr!("scan_current_path"),
-        "scan_cancel_hint" => tr!("scan_cancel_hint"),
-        "help_title" => tr!("help_title"),
-        "help_move" => tr!("help_move"),
-        "help_select_all" => tr!("help_select_all"),
-        "help_toggle" => tr!("help_toggle"),
-        "help_actions" => tr!("help_actions"),
-        "help_command" => tr!("help_command"),
-        "help_palette" => tr!("help_palette"),
-        "help_page" => tr!("help_page"),
-        "help_home" => tr!("help_home"),
-        "help_confirm_yes" => tr!("help_confirm_yes"),
-        "help_confirm_no" => tr!("help_confirm_no"),
-        "help_quit" => tr!("help_quit"),
-        "status_item_toggled" => tr!("status_item_toggled"),
-        "state_selected" => tr!("state_selected"),
-        "state_deselected" => tr!("state_deselected"),
-        "command_placeholder" => tr!("command_placeholder"),
-        "hint_scan" => tr!("hint_scan"),
-        "hint_usage" => tr!("hint_usage"),
-        "hint_move" => tr!("hint_move"),
-        "hint_select" => tr!("hint_select"),
-        "hint_clean" => tr!("hint_clean"),
-        "hint_commands" => tr!("hint_commands"),
-        "hint_help" => tr!("hint_help"),
-        "hint_quit" => tr!("hint_quit"),
-        "hint_choose" => tr!("hint_choose"),
-        "hint_run" => tr!("hint_run"),
-        "hint_close" => tr!("hint_close"),
-        "confirm_title" => tr!("confirm_title"),
-        "confirm_body" => tr!("confirm_body"),
-        "confirm_restore_title" => tr!("confirm_restore_title"),
-        "confirm_restore_body" => tr!("confirm_restore_body"),
-        "confirm_yes" => tr!("confirm_yes"),
-        "confirm_no" => tr!("confirm_no"),
-        "confirm_hint" => tr!("confirm_hint"),
-        "plan_schema" => tr!("plan_schema"),
-        "plan_candidates" => tr!("plan_candidates"),
-        "plan_selected" => tr!("plan_selected"),
-        "plan_selected_size" => tr!("plan_selected_size"),
-        "plan_default_action" => tr!("plan_default_action"),
-        "plan_requires_confirmation" => tr!("plan_requires_confirmation"),
-        "plan_agent_can_execute" => tr!("plan_agent_can_execute"),
-        "plan_rollback" => tr!("plan_rollback"),
-        "plan_export_hint" => tr!("plan_export_hint"),
-        "plan_clean_hint" => tr!("plan_clean_hint"),
-        "plan_scanning" => tr!("plan_scanning"),
-        "plan_keep_typing" => tr!("plan_keep_typing"),
-        "plan_empty" => tr!("plan_empty"),
-        "plan_empty_hint" => tr!("plan_empty_hint"),
-        "command_scan" => tr!("command_scan"),
-        "command_review" => tr!("command_review"),
-        "command_plan" => tr!("command_plan"),
-        "command_clean" => tr!("command_clean"),
-        "command_clean_confirm" => tr!("command_clean_confirm"),
-        "command_restore" => tr!("command_restore"),
-        "command_rules" => tr!("command_rules"),
-        "command_plugins" => tr!("command_plugins"),
-        "command_languages" => tr!("command_languages"),
-        "command_tasks" => tr!("command_tasks"),
-        "command_usage" => tr!("command_usage"),
-        "command_export_plan" => tr!("command_export_plan"),
-        "command_help" => tr!("command_help"),
-        "command_quit" => tr!("command_quit"),
-        "restore_select_hint" => tr!("restore_select_hint"),
-        "restore_state_available" => tr!("restore_state_available"),
-        "restore_state_restored" => tr!("restore_state_restored"),
-        _ => key.to_string(),
+fn builtin_messages(locale: &str) -> &'static BTreeMap<String, String> {
+    static EN_US: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    static ZH_CN: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+    static EMPTY: OnceLock<BTreeMap<String, String>> = OnceLock::new();
+
+    match normalize_locale(locale).as_str() {
+        "en-US" | "en" => EN_US.get_or_init(|| parse_builtin_messages("en-US")),
+        "zh-CN" | "zh" => ZH_CN.get_or_init(|| parse_builtin_messages("zh-CN")),
+        _ => EMPTY.get_or_init(BTreeMap::new),
     }
+}
+
+fn parse_builtin_messages(locale: &str) -> BTreeMap<String, String> {
+    builtin_locale_file(locale)
+        .and_then(|raw| {
+            parse_language_yaml(raw)
+                .ok()
+                .map(|(messages, _, _)| messages)
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -814,6 +661,24 @@ mod tests {
         let i18n = I18n::new("zh_CN.UTF-8", BTreeMap::new(), builtin_language_packs());
         assert_eq!(i18n.locale(), "zh-CN");
         assert_eq!(i18n.t("label_status"), "状态");
+        assert_eq!(i18n.t("label_insight"), "解析");
+        assert_eq!(
+            i18n.t("insight_empty"),
+            "选中一项并按 i，让 Agent 解析其作用与引用关系。"
+        );
+    }
+
+    #[test]
+    fn every_builtin_language_key_resolves_from_the_yaml_bundle() {
+        for locale in available_builtin_locales() {
+            let raw = builtin_locale_file(locale).expect("built-in locale");
+            let (messages, _, _) = parse_language_yaml(raw).expect("parse built-in locale");
+            let i18n = I18n::new(locale, BTreeMap::new(), builtin_language_packs());
+
+            for (key, expected) in messages {
+                assert_eq!(i18n.t(&key), expected, "{locale} should resolve {key}");
+            }
+        }
     }
 
     #[test]

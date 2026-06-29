@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, path::PathBuf};
 
-use cleanr_core::{EntryKind, ScanEntry};
+use cleanr_core::{CleanupItem, Confidence, EntryKind, ScanEntry};
 use cleanr_fs::ScanPhase;
 use cleanr_i18n::LanguagePackSource;
 use cleanr_tasks::restored_run_ids;
@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
 use crate::{
@@ -34,6 +34,8 @@ pub(crate) use helpers::*;
 use home::*;
 use restore::*;
 pub(crate) use root::render;
+#[cfg(test)]
+pub(crate) use scan::unbounded_scan_progress_ratio;
 use scan::*;
 use usage::render_usage;
 #[cfg(test)]

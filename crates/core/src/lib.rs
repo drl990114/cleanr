@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -398,16 +401,40 @@ fn remove_overlapping_items(mut items: Vec<CleanupItem>) -> Vec<CleanupItem> {
     });
 
     let mut non_overlapping: Vec<CleanupItem> = Vec::with_capacity(items.len());
+    let mut kept_paths = HashSet::with_capacity(items.len());
+    let mut kept_ancestor_paths = HashSet::with_capacity(items.len());
     for item in items {
-        if non_overlapping
-            .iter()
-            .any(|kept| item.path.starts_with(&kept.path) || kept.path.starts_with(&item.path))
-        {
+        if overlaps_kept_path(&item.path, &kept_paths, &kept_ancestor_paths) {
             continue;
         }
+        remember_kept_path(&item.path, &mut kept_paths, &mut kept_ancestor_paths);
         non_overlapping.push(item);
     }
     non_overlapping
+}
+
+fn overlaps_kept_path(
+    path: &Path,
+    kept_paths: &HashSet<PathBuf>,
+    kept_ancestor_paths: &HashSet<PathBuf>,
+) -> bool {
+    path.ancestors()
+        .filter(|ancestor| !ancestor.as_os_str().is_empty())
+        .any(|ancestor| kept_paths.contains(ancestor))
+        || kept_ancestor_paths.contains(path)
+}
+
+fn remember_kept_path(
+    path: &Path,
+    kept_paths: &mut HashSet<PathBuf>,
+    kept_ancestor_paths: &mut HashSet<PathBuf>,
+) {
+    kept_paths.insert(path.to_path_buf());
+    kept_ancestor_paths.extend(
+        path.ancestors()
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
+            .map(Path::to_path_buf),
+    );
 }
 
 fn tree_fingerprints(entries: &[ScanEntry]) -> HashMap<PathBuf, CleanupItemFingerprint> {
@@ -426,15 +453,27 @@ fn tree_fingerprints(entries: &[ScanEntry]) -> HashMap<PathBuf, CleanupItemFinge
         })
         .collect::<HashMap<_, _>>();
 
-    for entry in entries {
-        let mut parent = entry.path.parent();
-        while let Some(path) = parent {
-            if let Some(fingerprint) = fingerprints.get_mut(path) {
-                fingerprint.descendants += 1;
-                fingerprint.latest_modified_at =
-                    max_datetime(fingerprint.latest_modified_at, entry.modified_at);
-            }
-            parent = path.parent();
+    let mut indices = (0..entries.len()).collect::<Vec<_>>();
+    indices.sort_by_key(|idx| std::cmp::Reverse(entries[*idx].path.components().count()));
+
+    for idx in indices {
+        let entry = &entries[idx];
+        let Some(parent) = entry.path.parent() else {
+            continue;
+        };
+        let child_fingerprint = (entry.kind == EntryKind::Directory)
+            .then(|| fingerprints.get(&entry.path).cloned())
+            .flatten();
+        let descendants = 1 + child_fingerprint
+            .as_ref()
+            .map_or(0, |fingerprint| fingerprint.descendants);
+        let latest_modified_at = child_fingerprint
+            .and_then(|fingerprint| fingerprint.latest_modified_at)
+            .or(entry.modified_at);
+        if let Some(parent_fingerprint) = fingerprints.get_mut(parent) {
+            parent_fingerprint.descendants += descendants;
+            parent_fingerprint.latest_modified_at =
+                max_datetime(parent_fingerprint.latest_modified_at, latest_modified_at);
         }
     }
 
@@ -584,11 +623,12 @@ mod tests {
             trust: RuleTrust::Builtin,
         };
         let modified_at = Utc::now();
+        let newer_modified_at = modified_at + chrono::Duration::seconds(1);
         let entries = vec![
             ScanEntry {
                 path: PathBuf::from("/repo/cache"),
                 kind: EntryKind::Directory,
-                size_bytes: 3,
+                size_bytes: 7,
                 modified_at: Some(modified_at),
                 rule_hits: vec![hit],
             },
@@ -599,6 +639,20 @@ mod tests {
                 modified_at: Some(modified_at),
                 rule_hits: Vec::new(),
             },
+            ScanEntry {
+                path: PathBuf::from("/repo/cache/nested"),
+                kind: EntryKind::Directory,
+                size_bytes: 4,
+                modified_at: Some(modified_at),
+                rule_hits: Vec::new(),
+            },
+            ScanEntry {
+                path: PathBuf::from("/repo/cache/nested/file"),
+                kind: EntryKind::File,
+                size_bytes: 4,
+                modified_at: Some(newer_modified_at),
+                rule_hits: Vec::new(),
+            },
         ];
 
         let plan = build_cleanup_plan(vec![PathBuf::from("/repo")], vec![], &entries);
@@ -606,9 +660,9 @@ mod tests {
         assert_eq!(
             plan.items[0].tree_fingerprint,
             Some(CleanupItemFingerprint {
-                descendants: 1,
-                total_size_bytes: 3,
-                latest_modified_at: Some(modified_at),
+                descendants: 3,
+                total_size_bytes: 7,
+                latest_modified_at: Some(newer_modified_at),
             })
         );
     }
