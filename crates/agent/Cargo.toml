@@ -17,7 +17,7 @@ ollama = ["dep:ollama-rs", "dep:tokio", "dep:url"]
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-cleanr-config = { version = "0.7.0", path = "../config" }
+cleanr-config = { version = "0.8.0", path = "../config" }
 async-openai = { workspace = true, optional = true }
 ollama-rs = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
