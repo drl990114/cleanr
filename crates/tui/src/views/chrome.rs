@@ -25,7 +25,7 @@ pub(crate) fn render_command(frame: &mut Frame<'_>, area: Rect, app: &Workbench)
         ]),
     };
 
-    let content_area = bounded_content_rect(area, 164, area.height);
+    let content_area = fluid_content_rect(area, 220, area.height);
     let block = Block::default()
         .borders(Borders::TOP)
         .border_style(Style::default().fg(app.theme.border))

@@ -58,7 +58,9 @@ cleanr --config /tmp/cleanr-default.toml config init
 ## 终端显示异常
 
 - 确认终端支持 Unicode 和彩色显示。
-- 尝试显式主题：
+- Cleanr 默认使用便携的 ANSI 基础色。如果颜色仍变成整片红/绿块，
+  请重置终端配置，或换一个终端应用验证。
+- 如果只是背景明暗不对，再设置显式主题：
 
   ```bash
   cleanr config set ui.theme dark

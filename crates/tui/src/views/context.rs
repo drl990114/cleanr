@@ -12,7 +12,7 @@ pub(crate) fn render_context_workspace(
     details: Vec<Line<'static>>,
 ) -> u16 {
     let wide = area.width >= 88;
-    let workspace = bounded_content_rect(area, 164, area.height);
+    let workspace = fluid_content_rect(area, 220, area.height);
     let columns = responsive_workspace(workspace, 56);
     let list_borders = if wide {
         Borders::TOP | Borders::RIGHT

@@ -3,8 +3,8 @@ use crate::{
     app::{ConfirmChoice, View},
     commands::palette_command_invocation,
     views::{
-        bottom_bounded_rect, bounded_content_rect, centered_bounded_rect, command_cursor_position,
-        display_width, ime_guard_position, render, truncate_text, unbounded_scan_progress_ratio,
+        bottom_bounded_rect, centered_bounded_rect, command_cursor_position, display_width,
+        fluid_content_rect, ime_guard_position, render, scan_loading_bar_sample, truncate_text,
         usage_descendant_count,
     },
 };
@@ -24,6 +24,7 @@ use ratatui::{
     Terminal,
     backend::TestBackend,
     layout::{Position, Rect},
+    style::Color,
 };
 use std::{collections::BTreeMap, fs, path::PathBuf, thread, time::Duration};
 
@@ -75,6 +76,27 @@ fn render_text(app: &mut Workbench, width: u16, height: u16) -> String {
         .join("\n")
 }
 
+fn theme_has_extended_color(theme: Theme) -> bool {
+    [
+        theme.bg,
+        theme.surface,
+        theme.surface_alt,
+        theme.fg,
+        theme.fg_dim,
+        theme.border,
+        theme.accent,
+        theme.ok,
+        theme.warn,
+        theme.danger,
+        theme.cyan,
+        theme.magenta,
+        theme.highlight_bg,
+        theme.highlight_fg,
+    ]
+    .iter()
+    .any(|color| matches!(color, Color::Rgb(_, _, _) | Color::Indexed(_)))
+}
+
 fn test_rule_hit(rule_id: &str) -> RuleHit {
     RuleHit {
         rule_pack_id: "builtin-dev".into(),
@@ -87,6 +109,14 @@ fn test_rule_hit(rule_id: &str) -> RuleHit {
         default_selected: true,
         trust: RuleTrust::Builtin,
     }
+}
+
+#[test]
+fn built_in_themes_use_only_portable_ansi_colors() {
+    assert!(!theme_has_extended_color(Theme::dark()));
+    assert!(!theme_has_extended_color(Theme::light()));
+    assert!(matches!(Theme::dark().bg, Color::Reset));
+    assert!(matches!(Theme::light().bg, Color::Reset));
 }
 
 #[test]
@@ -132,6 +162,22 @@ fn home_layout_has_one_clear_primary_action() {
     assert!(screen.contains("Every item is reviewed first"));
     assert!(!screen.contains("Recent activity"));
     assert!(!screen.contains("No scan yet"));
+}
+
+#[test]
+fn home_layout_starts_near_the_top_on_tall_terminals() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    let screen = render_text(&mut app, 111, 58);
+    let title_line = screen
+        .lines()
+        .position(|line| line.contains("Safe intelligent disk organization"))
+        .expect("home title should render");
+
+    assert!(
+        title_line <= 6,
+        "home title rendered too low at line {title_line}\n{screen}"
+    );
 }
 
 #[test]
@@ -598,7 +644,7 @@ fn usage_scan_exposes_live_progress() {
 #[test]
 fn adaptive_rects_never_exceed_terminal_area() {
     let area = Rect::new(3, 5, 40, 10);
-    let content = bounded_content_rect(area, 164, 30);
+    let content = fluid_content_rect(area, 220, 30);
     let popup = centered_bounded_rect(area, 100, 40, 120);
     let bottom = bottom_bounded_rect(area, 100, 40, 120);
 
@@ -705,12 +751,18 @@ fn text_truncation_respects_terminal_display_width() {
 }
 
 #[test]
-fn unbounded_scan_progress_is_monotonic_and_never_reports_done() {
-    let samples = [0, 1, 64, 512, 4096, 65_536].map(unbounded_scan_progress_ratio);
+fn scan_loading_bar_is_continuous_activity_not_percent_progress() {
+    let samples = [
+        scan_loading_bar_sample(40, 0, Theme::dark()),
+        scan_loading_bar_sample(40, 4, Theme::dark()),
+        scan_loading_bar_sample(40, 16, Theme::dark()),
+    ];
 
-    assert!(samples.windows(2).all(|pair| pair[0] <= pair[1]));
-    assert_eq!(samples[0], 0.03);
-    assert!(samples[samples.len() - 1] < 1.0);
+    assert!(samples.iter().all(|sample| display_width(sample) == 40));
+    assert!(samples.iter().all(|sample| sample.contains('─')));
+    assert!(samples.iter().all(|sample| sample.contains('━')));
+    assert!(samples.iter().all(|sample| !sample.contains('█')));
+    assert_ne!(samples[0], samples[1]);
 }
 
 #[test]

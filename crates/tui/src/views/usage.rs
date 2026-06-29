@@ -135,7 +135,7 @@ pub(crate) fn render_usage(frame: &mut Frame<'_>, area: Rect, app: &mut Workbenc
     ]))
     .wrap(Wrap { trim: true })
     .style(Style::default().bg(app.theme.surface));
-    let summary_area = bounded_content_rect(area, 164, 1);
+    let summary_area = fluid_content_rect(area, 220, 1);
     frame.render_widget(overview, summary_area);
 
     let content_area = Rect::new(

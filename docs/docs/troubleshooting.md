@@ -61,7 +61,9 @@ cleanr --config /tmp/cleanr-default.toml config init
 ## The terminal display is unreadable
 
 - Make sure the terminal supports Unicode and color.
-- Try an explicit theme:
+- Cleanr uses portable ANSI colors by default. If colors still appear as solid
+  red/green blocks, reset the terminal profile or try another terminal app.
+- If the background brightness is wrong, set an explicit theme:
 
   ```bash
   cleanr config set ui.theme dark

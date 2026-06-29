@@ -1,12 +1,7 @@
 use super::*;
 
 pub(crate) fn render_home(frame: &mut Frame<'_>, area: Rect, app: &Workbench) {
-    let mut content = bounded_content_rect(area, 104, 14);
-    if area.height > content.height {
-        content.y = content
-            .y
-            .saturating_add(area.height.saturating_sub(content.height) / 3);
-    }
+    let content = fluid_content_rect(area, 160, 14);
 
     let candidate_count = app.plan.as_ref().map_or_else(
         || {
@@ -247,13 +242,11 @@ pub(crate) fn home_action_line(
 ) -> Line<'static> {
     let key_style = if primary {
         Style::default()
-            .bg(theme.accent)
-            .fg(theme.bg)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .bg(theme.surface_alt)
-            .fg(theme.fg)
+            .fg(theme.fg_dim)
             .add_modifier(Modifier::BOLD)
     };
     let description_style = if primary {

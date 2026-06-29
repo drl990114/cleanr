@@ -43,6 +43,7 @@ pub fn run(options: TuiOptions) -> Result<()> {
     }
 
     enable_raw_mode().context("failed to enable raw mode")?;
+    let _guard = TerminalGuard;
     let mut stdout = io::stdout();
     execute!(
         stdout,
@@ -52,7 +53,6 @@ pub fn run(options: TuiOptions) -> Result<()> {
         Hide
     )
     .context("failed to enter alternate screen")?;
-    let _guard = TerminalGuard;
 
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to initialize terminal")?;

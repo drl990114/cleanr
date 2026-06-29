@@ -7,7 +7,7 @@ pub(crate) fn render_scan_workspace(frame: &mut Frame<'_>, area: Rect, app: &mut
     }
 
     let wide = area.width >= 88;
-    let workspace = bounded_content_rect(area, 164, area.height);
+    let workspace = fluid_content_rect(area, 220, area.height);
     let columns = responsive_workspace(workspace, 62);
 
     let right = Layout::default()
@@ -27,7 +27,7 @@ pub(crate) fn render_scan_progress(
     app: &Workbench,
     title: String,
 ) {
-    let mut panel_area = bounded_content_rect(area, 104, 7);
+    let mut panel_area = fluid_content_rect(area, 220, area.height);
     if area.height > panel_area.height {
         panel_area.y = panel_area.y.saturating_add(1);
     }
@@ -46,11 +46,12 @@ pub(crate) fn render_scan_progress(
 
     let progress = app.scan_progress.as_ref();
     let phase = progress.map_or(ScanPhase::Discovering, |value| value.phase);
-    let (bar, progress_label) = scan_progress_display(progress, app);
+    let progress_label = scan_progress_label(progress, app);
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
@@ -86,14 +87,14 @@ pub(crate) fn render_scan_progress(
             .alignment(ratatui::layout::Alignment::Right),
         heading[1],
     );
+    frame.render_widget(Paragraph::new(scan_stage_line(phase, app)), rows[1]);
     frame.render_widget(
-        Paragraph::new(progress_bar_line(
-            bar,
-            rows[1].width as usize,
+        Paragraph::new(activity_bar_line(
+            rows[2].width as usize,
             app.animation_tick,
             app.theme,
         )),
-        rows[1],
+        rows[2],
     );
 
     let stats = progress.map_or_else(
@@ -112,7 +113,7 @@ pub(crate) fn render_scan_progress(
         Paragraph::new(stats)
             .style(Style::default().fg(app.theme.fg_dim))
             .alignment(ratatui::layout::Alignment::Left),
-        rows[2],
+        rows[3],
     );
 
     let current_path = progress
@@ -128,7 +129,7 @@ pub(crate) fn render_scan_progress(
             |path| path.display().to_string(),
         );
     let current_path_label = format!("{}  ", app.i18n.t("scan_current_path"));
-    let current_path_width = rows[3]
+    let current_path_width = rows[4]
         .width
         .saturating_sub(u16::try_from(display_width(&current_path_label)).unwrap_or(u16::MAX))
         as usize;
@@ -140,128 +141,122 @@ pub(crate) fn render_scan_progress(
         ])])
         .alignment(ratatui::layout::Alignment::Left)
         .wrap(Wrap { trim: true }),
-        rows[3],
+        rows[4],
     );
     frame.render_widget(
         Paragraph::new(app.i18n.t("scan_cancel_hint"))
             .style(Style::default().fg(app.theme.fg_dim))
             .alignment(ratatui::layout::Alignment::Right),
-        rows[4],
+        rows[5],
     );
 }
 
-fn scan_progress_display(
-    progress: Option<&cleanr_fs::ScanProgress>,
-    app: &Workbench,
-) -> (ProgressBar, String) {
+fn scan_progress_label(progress: Option<&cleanr_fs::ScanProgress>, app: &Workbench) -> String {
     progress.map_or_else(
-        || (ProgressBar::Activity, app.i18n.t("scan_preparing")),
+        || app.i18n.t("scan_preparing"),
         |value| match value.phase {
-            ScanPhase::Discovering => (
-                ProgressBar::Activity,
-                app.i18n.format(
-                    "scan_progress_discovered",
-                    &[("total", value.entries_total.to_string())],
-                ),
+            ScanPhase::Discovering => app.i18n.format(
+                "scan_progress_discovered",
+                &[("total", value.entries_total.to_string())],
             ),
             ScanPhase::Scanning => {
-                let bar = if value.entries_total == 0 {
-                    ProgressBar::Activity
-                } else {
-                    ProgressBar::Determinate(
-                        (value.entries_scanned as f64 / value.entries_total as f64).clamp(0.0, 1.0),
+                if value.entries_total == 0 {
+                    app.i18n.format(
+                        "scan_progress_unbounded",
+                        &[("scanned", value.entries_scanned.to_string())],
                     )
-                };
-                (
-                    bar,
-                    if value.entries_total == 0 {
-                        app.i18n.format(
-                            "scan_progress_unbounded",
-                            &[("scanned", value.entries_scanned.to_string())],
-                        )
-                    } else {
-                        app.i18n.format(
-                            "scan_progress_count",
-                            &[
-                                ("scanned", value.entries_scanned.to_string()),
-                                ("total", value.entries_total.to_string()),
-                            ],
-                        )
-                    },
-                )
+                } else {
+                    app.i18n.format(
+                        "scan_progress_count",
+                        &[
+                            ("scanned", value.entries_scanned.to_string()),
+                            ("total", value.entries_total.to_string()),
+                        ],
+                    )
+                }
             }
-            ScanPhase::Aggregating => (
-                ProgressBar::Determinate(0.96),
-                app.i18n.t("scan_progress_aggregating"),
-            ),
+            ScanPhase::Aggregating => app.i18n.t("scan_progress_aggregating"),
         },
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum ProgressBar {
-    Determinate(f64),
-    Activity,
+fn scan_stage_line(phase: ScanPhase, app: &Workbench) -> Line<'static> {
+    let stages = [ScanPhase::Scanning, ScanPhase::Aggregating];
+    let current = stage_index(phase);
+    let mut spans = Vec::new();
+
+    for (index, stage) in stages.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(" ── ", Style::default().fg(app.theme.border)));
+        }
+        let style = if index < current {
+            Style::default().fg(app.theme.ok)
+        } else if index == current {
+            Style::default()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.theme.fg_dim)
+        };
+        let marker = if index < current {
+            "✓"
+        } else if index == current {
+            "●"
+        } else {
+            "○"
+        };
+        spans.push(Span::styled(
+            format!("{marker} {}", app.scan_phase_label(stage)),
+            style,
+        ));
+    }
+
+    Line::from(spans)
 }
 
-fn progress_bar_line(
-    progress: ProgressBar,
-    width: usize,
-    animation_tick: u64,
-    theme: Theme,
-) -> Line<'static> {
+fn stage_index(phase: ScanPhase) -> usize {
+    match phase {
+        ScanPhase::Discovering | ScanPhase::Scanning => 0,
+        ScanPhase::Aggregating => 1,
+    }
+}
+
+fn activity_bar_line(width: usize, animation_tick: u64, theme: Theme) -> Line<'static> {
     if width == 0 {
         return Line::from("");
     }
-    match progress {
-        ProgressBar::Determinate(ratio) => {
-            let ratio = ratio.clamp(0.0, 1.0);
-            let filled = ((width as f64) * ratio).round() as usize;
-            let filled = if ratio > 0.0 { filled.max(1) } else { filled }.min(width);
-            let empty = width.saturating_sub(filled);
-            Line::from(vec![
-                Span::styled(
-                    "━".repeat(filled),
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("─".repeat(empty), Style::default().fg(theme.surface_alt)),
-            ])
-        }
-        ProgressBar::Activity => {
-            let pulse = (width / 6).clamp(6, 16).min(width);
-            let max_start = width.saturating_sub(pulse);
-            let start = if max_start == 0 {
-                0
-            } else {
-                (animation_tick as usize) % (max_start + 1)
-            };
-            let end = start.saturating_add(pulse).min(width);
-            Line::from(vec![
-                Span::styled("─".repeat(start), Style::default().fg(theme.surface_alt)),
-                Span::styled(
-                    "━".repeat(end.saturating_sub(start)),
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    "─".repeat(width.saturating_sub(end)),
-                    Style::default().fg(theme.surface_alt),
-                ),
-            ])
-        }
-    }
+
+    let pulse = (width / 5).clamp(8, 24).min(width);
+    let cycle = width.saturating_add(pulse).max(1);
+    let head = ((animation_tick as usize)
+        .wrapping_mul(3)
+        .saturating_add(pulse))
+        % cycle;
+    let start = head.saturating_sub(pulse).min(width);
+    let end = head.min(width);
+
+    Line::from(vec![
+        Span::styled("─".repeat(start), Style::default().fg(theme.surface_alt)),
+        Span::styled(
+            "━".repeat(end.saturating_sub(start)),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "─".repeat(width.saturating_sub(end)),
+            Style::default().fg(theme.surface_alt),
+        ),
+    ])
 }
 
 #[cfg(test)]
-pub(crate) fn unbounded_scan_progress_ratio(entries_seen: usize) -> f64 {
-    if entries_seen == 0 {
-        return 0.03;
-    }
-    let entries_seen = entries_seen as f64;
-    (entries_seen / (entries_seen + 512.0)).clamp(0.05, 0.92)
+pub(crate) fn scan_loading_bar_sample(width: usize, animation_tick: u64, theme: Theme) -> String {
+    activity_bar_line(width, animation_tick, theme)
+        .spans
+        .into_iter()
+        .map(|span| span.content.into_owned())
+        .collect()
 }
 
 pub(crate) fn render_candidates(

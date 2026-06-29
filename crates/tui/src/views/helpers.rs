@@ -187,8 +187,14 @@ pub(crate) fn responsive_workspace(area: Rect, list_percent: u16) -> [Rect; 2] {
     [chunks[0], chunks[1]]
 }
 
-pub(crate) fn bounded_content_rect(area: Rect, max_width: u16, desired_height: u16) -> Rect {
-    let width = area.width.min(max_width);
+pub(crate) fn fluid_content_rect(area: Rect, max_width: u16, desired_height: u16) -> Rect {
+    let side_margin: u16 = match area.width {
+        0..=95 => 0,
+        96..=159 => 2,
+        _ => 4,
+    };
+    let available_width = area.width.saturating_sub(side_margin.saturating_mul(2));
+    let width = available_width.min(max_width);
     let height = area.height.min(desired_height);
     Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
