@@ -12,8 +12,8 @@ use cleanr_agent::{ActionRequest, CleanupIntent};
 use cleanr_config::Config;
 use cleanr_core::{
     Confidence, EXECUTION_SCHEMA_VERSION, EntryKind, ExecutionItem, ExecutionManifest,
-    ExecutionStatus, ExecutionSummary, PlannedAction, RollbackReceipt, RuleHit, RuleTrust,
-    ScanEntry,
+    ExecutionStatus, ExecutionSummary, GlobalScanKind, PlannedAction, RollbackReceipt, RuleHit,
+    RuleTrust, ScanEntry, ScanRequest,
 };
 use cleanr_fs::{ScanOptions, ScanPhase, ScanProgress, scan_paths};
 use cleanr_i18n::{I18n, builtin_language_packs};
@@ -342,7 +342,7 @@ fn chinese_scan_progress_uses_refined_thin_rail_layout() {
         Theme::light(),
     )
     .expect("create workbench");
-    app.dispatch(ActionRequest::Scan(Vec::new()));
+    app.dispatch(ActionRequest::Scan(ScanRequest::default()));
     app.scan_progress = Some(ScanProgress {
         phase: ScanPhase::Scanning,
         entries_total: 0,
@@ -515,7 +515,7 @@ fn scan_command_runs_in_background_and_finds_candidates() {
     .expect("write");
 
     let mut app = app(temp.path().to_path_buf());
-    app.dispatch(ActionRequest::Scan(Vec::new()));
+    app.dispatch(ActionRequest::Scan(ScanRequest::default()));
     assert!(app.is_scan_running());
     app.handle_key(key(KeyCode::Char('/')));
     assert_eq!(app.input(), "/");
@@ -531,6 +531,30 @@ fn scan_command_runs_in_background_and_finds_candidates() {
     assert!(!app.is_scan_running());
     app.dispatch(ActionRequest::Review);
     assert_eq!(app.plan().expect("plan").summary.selected_count, 1);
+}
+
+#[test]
+fn global_scan_request_replaces_current_roots() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    let expected_temp = std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir());
+
+    app.dispatch(ActionRequest::Scan(ScanRequest::global(vec![
+        GlobalScanKind::TempFiles,
+    ])));
+
+    assert!(app.is_scan_running());
+    assert_eq!(app.roots, vec![expected_temp]);
+    app.cancel_scan();
+    for _ in 0..50 {
+        app.poll_tasks();
+        if !app.is_scan_running() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[test]
@@ -617,7 +641,7 @@ fn usage_scan_exposes_live_progress() {
     }
 
     let mut app = app(temp.path().to_path_buf());
-    app.dispatch(ActionRequest::Usage(Vec::new()));
+    app.dispatch(ActionRequest::Usage(ScanRequest::default()));
     assert_eq!(app.view, View::Usage);
 
     for _ in 0..50 {
@@ -803,7 +827,7 @@ fn home_shortcuts_hide_context_views() {
     app.handle_key(key(KeyCode::Char('h')));
     assert!(app.is_home());
 
-    app.dispatch(ActionRequest::Usage(Vec::new()));
+    app.dispatch(ActionRequest::Usage(ScanRequest::default()));
     assert_eq!(app.view, View::Usage);
 
     app.handle_key(key(KeyCode::Esc));
@@ -829,7 +853,7 @@ fn toggling_selection_updates_summary() {
     .expect("write");
 
     let mut app = app(temp.path().to_path_buf());
-    app.dispatch(ActionRequest::Scan(Vec::new()));
+    app.dispatch(ActionRequest::Scan(ScanRequest::default()));
     for _ in 0..50 {
         app.poll_tasks();
         if !app.is_scan_running() {
@@ -853,9 +877,8 @@ fn palette_selection_dispatches_non_scan_command() {
     app.handle_key(key(KeyCode::Char('/')));
     assert!(app.palette_open());
 
-    // Navigate to /languages in the palette.
-    for _ in 0..5 {
-        app.handle_key(key(KeyCode::Down));
+    for ch in "langu".chars() {
+        app.handle_key(key(KeyCode::Char(ch)));
     }
     app.handle_key(key(KeyCode::Enter));
 
@@ -879,12 +902,45 @@ fn palette_enter_dispatches_filtered_selection() {
 }
 
 #[test]
+fn palette_global_filter_dispatches_global_scan() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    let original_root = temp.path().to_path_buf();
+    let expected_temp = std::env::temp_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::temp_dir());
+
+    app.handle_key(key(KeyCode::Char('/')));
+    for ch in "global".chars() {
+        app.handle_key(key(KeyCode::Char(ch)));
+    }
+    app.handle_key(key(KeyCode::Enter));
+
+    assert!(!app.palette_open());
+    assert!(app.is_scan_running());
+    assert!(app.roots.contains(&expected_temp));
+    assert!(!app.roots.contains(&original_root));
+    app.cancel_scan();
+    for _ in 0..50 {
+        app.poll_tasks();
+        if !app.is_scan_running() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
 fn palette_invocation_keeps_flags_and_drops_placeholders() {
     assert_eq!(
         palette_command_invocation("/clean --confirm"),
         "/clean --confirm"
     );
     assert_eq!(palette_command_invocation("/scan [path...]"), "/scan");
+    assert_eq!(
+        palette_command_invocation("/scan --global"),
+        "/scan --global"
+    );
     assert_eq!(
         palette_command_invocation("/export-plan [path]"),
         "/export-plan"
@@ -963,7 +1019,7 @@ fn toggle_all_selects_and_deselects_scan_items() {
     .expect("write");
 
     let mut app = app(temp.path().to_path_buf());
-    app.dispatch(ActionRequest::Scan(Vec::new()));
+    app.dispatch(ActionRequest::Scan(ScanRequest::default()));
     for _ in 0..50 {
         app.poll_tasks();
         if !app.is_scan_running() {

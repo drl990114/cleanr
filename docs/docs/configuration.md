@@ -41,11 +41,12 @@ cleanr --config ./cleanr.toml ~/projects
 stay_on_filesystem = false
 ignore_dirs = []
 ignore_patterns = ["**/.git", "**/.git/**"]
+global_kinds = ["developer-caches", "browser-caches", "app-caches", "temp-files", "logs", "downloads"]
 
 [cleanup]
 default_action = "trash"
 require_confirm = true
-enabled_rule_packs = ["builtin-dev", "builtin-general"]
+enabled_rule_packs = ["builtin-dev", "builtin-general", "builtin-system"]
 
 [agent]
 provider = "local"
@@ -92,6 +93,7 @@ valid configuration.
 | `stay_on_filesystem` | `false` | When `true`, do not cross filesystem boundaries during a scan |
 | `ignore_dirs` | `[]` | Exact directory paths to skip |
 | `ignore_patterns` | Git metadata globs | Glob patterns matched against absolute and root-relative paths |
+| `global_kinds` | all built-in kinds | System cleanup categories used by `/scan --global` |
 
 Use `ignore_dirs` for known absolute directories and `ignore_patterns` for
 repeatable names or layouts:

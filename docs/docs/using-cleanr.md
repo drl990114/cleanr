@@ -22,10 +22,21 @@ You can replace the current roots from the command palette:
 /scan /home/me/projects/app-one /home/me/Downloads
 ```
 
-Add `--global` to include known developer cache locations:
+Add `--global` to scan known system cleanup locations in addition to any paths
+you provide:
 
 ```text
 /scan /home/me/projects --global
+```
+
+From the command palette, press `/`, type `global`, and press `Enter` to select
+the `/scan --global` shortcut without remembering the flag.
+
+Use `--global-kind` to narrow the global preset. Passing a kind automatically
+enables global scanning:
+
+```text
+/scan --global-kind browser-caches
 ```
 
 Paths typed inside the TUI are not expanded by a shell, so `~` and environment
@@ -108,8 +119,10 @@ after a scan finishes.
 
 | Command | What it does |
 | --- | --- |
-| `/scan [path...] [--global]` | Scan paths, optionally including known developer caches |
-| `/usage [path...] [--global]` | Scan and open the disk-usage summary |
+| `/scan [path...] [--global] [--global-kind=<kind>]` | Scan paths or known system cleanup locations |
+| `/scan --global` | Scan all known system cleanup locations |
+| `/usage [path...] [--global] [--global-kind=<kind>]` | Scan and open the disk-usage summary |
+| `/usage --global` | Scan known system cleanup locations and open usage |
 | `/review` | Build and show cleanup candidates |
 | `/plan` | Build the current cleanup plan |
 | `/clean` | Review the current selection and request confirmation |

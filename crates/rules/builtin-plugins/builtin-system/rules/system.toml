@@ -1,0 +1,137 @@
+id = "builtin-system"
+name = "Built-in system cleanup locations"
+version = "0.8.0"
+description = "Known user-level system cleanup candidates such as browser caches, app caches, logs, temporary files, and large downloads."
+categories = ["browser-cache", "application-cache", "temporary-files", "logs", "downloads"]
+
+[[rules]]
+id = "chrome-cache-directory"
+label = "Chrome cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/Google/Chrome/**/{Cache,Code Cache,GPUCache,DawnCache,ShaderCache}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Chrome cache directories contain downloaded web resources that Chrome recreates automatically."
+risk_note = "This does not target browser profiles, history, cookies, or saved sessions; the next browser launch may need to redownload cached content."
+
+[[rules]]
+id = "chromium-cache-directory"
+label = "Chromium cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/Chromium/**/{Cache,Code Cache,GPUCache,DawnCache,ShaderCache}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Chromium cache directories contain downloaded web resources that Chromium recreates automatically."
+risk_note = "This does not target browser profiles, history, cookies, or saved sessions; the next browser launch may need to redownload cached content."
+
+[[rules]]
+id = "linux-chromium-cache-directory"
+label = "Linux Chromium cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/{google-chrome,chromium,microsoft-edge}/**/{Cache,Code Cache,GPUCache,DawnCache,ShaderCache}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Browser cache directories contain downloaded web resources that browsers recreate automatically."
+risk_note = "This does not target browser profiles, history, cookies, or saved sessions; the next browser launch may need to redownload cached content."
+
+[[rules]]
+id = "edge-cache-directory"
+label = "Microsoft Edge cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/Microsoft/Edge/**/{Cache,Code Cache,GPUCache,DawnCache,ShaderCache}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Microsoft Edge cache directories contain downloaded web resources that Edge recreates automatically."
+risk_note = "This does not target browser profiles, history, cookies, or saved sessions; the next browser launch may need to redownload cached content."
+
+[[rules]]
+id = "macos-edge-cache-directory"
+label = "Microsoft Edge cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/Microsoft Edge/**/{Cache,Code Cache,GPUCache,DawnCache,ShaderCache}", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Microsoft Edge cache directories contain downloaded web resources that Edge recreates automatically."
+risk_note = "This does not target browser profiles, history, cookies, or saved sessions; the next browser launch may need to redownload cached content."
+
+[[rules]]
+id = "firefox-cache-directory"
+label = "Firefox cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/{Firefox,firefox}/**/cache2", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Firefox cache directories contain downloaded web resources that Firefox recreates automatically."
+risk_note = "This does not target browser profiles, history, cookies, or saved sessions; the next browser launch may need to redownload cached content."
+
+[[rules]]
+id = "safari-cache-directory"
+label = "Safari cache directory"
+category = "browser-cache"
+match = { kind = "directory", path_glob = "**/com.apple.Safari/**", min_size = 1048576 }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "Safari cache directories contain downloaded web resources that Safari recreates automatically."
+risk_note = "This targets Safari cache locations, not history, cookies, saved passwords, or browser profiles."
+
+[[rules]]
+id = "macos-application-cache-directory"
+label = "macOS application cache directory"
+category = "application-cache"
+match = { kind = "directory", path_glob = "**/Library/Caches/*", min_size = 10485760 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Application cache directories often contain rebuildable data, but ownership varies by app."
+risk_note = "Review before cleaning; some apps may keep useful offline data or local working state in cache folders."
+
+[[rules]]
+id = "linux-application-cache-directory"
+label = "Linux application cache directory"
+category = "application-cache"
+match = { kind = "directory", path_glob = "**/.cache/*", min_size = 10485760 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Application cache directories often contain rebuildable data, but ownership varies by app."
+risk_note = "Review before cleaning; some apps may keep useful offline data or local working state in cache folders."
+
+[[rules]]
+id = "large-temporary-file"
+label = "Large temporary file"
+category = "temporary-files"
+match = { kind = "file", extension = "tmp", min_size = 10485760 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Large temporary files are often leftovers from installers, editors, or application work."
+risk_note = "Review the path first; an active application may still rely on a temporary file."
+
+[[rules]]
+id = "large-log-file"
+label = "Large log file"
+category = "logs"
+match = { kind = "file", extension = "log", min_size = 52428800 }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Large log files can usually be removed when they are no longer needed for debugging."
+risk_note = "Logs may be needed for troubleshooting, auditing, or support requests."
+
+[[rules]]
+id = "large-download-file"
+label = "Large downloaded file"
+category = "downloads"
+match = { kind = "file", path_glob = "**/Downloads/**", min_size = 104857600 }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "Large files in Downloads may be installers, archives, or exports that are no longer needed."
+risk_note = "Downloads are user data; inspect each file before cleaning."

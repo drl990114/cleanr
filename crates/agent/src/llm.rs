@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use cleanr_config::AgentBackend;
+use cleanr_core::ScanRequest;
 use serde::{Deserialize, Serialize};
 
 use crate::{ActionRequest, AgentProvider, AgentResponse, PathContext, PathInsight, command_name};
@@ -11,7 +12,7 @@ use crate::{ActionRequest, AgentProvider, AgentResponse, PathContext, PathInsigh
 const SYSTEM_PROMPT: &str = r#"You are the command parser for cleanr, a safe local disk cleanup assistant.
 
 Available actions (respond with a JSON array of these objects):
-- {"action": "scan", "paths": ["."]}              - scan one or more roots for cleanup candidates; use ["--global"] for known developer caches
+- {"action": "scan", "paths": ["."]}              - scan one or more roots for cleanup candidates; use ["--global"] for system cleanup locations
 - {"action": "review"}                               - build and show the cleanup review plan
 - {"action": "plan"}                                 - export an AI-readable JSON cleanup plan
 - {"action": "clean"}                                - request cleanup; the host must ask the user for confirmation
@@ -71,9 +72,9 @@ enum LlmAction {
 impl LlmAction {
     fn into_action_request(self) -> ActionRequest {
         match self {
-            LlmAction::Scan { paths } => {
-                ActionRequest::Scan(paths.into_iter().map(PathBuf::from).collect())
-            }
+            LlmAction::Scan { paths } => ActionRequest::Scan(ScanRequest::paths(
+                paths.into_iter().map(PathBuf::from).collect(),
+            )),
             LlmAction::Review => ActionRequest::Review,
             LlmAction::Plan => ActionRequest::Plan,
             LlmAction::Clean => ActionRequest::Clean {
@@ -84,9 +85,9 @@ impl LlmAction {
             LlmAction::Plugins => ActionRequest::Plugins,
             LlmAction::Languages => ActionRequest::Languages,
             LlmAction::Tasks => ActionRequest::Tasks,
-            LlmAction::Usage { paths } => {
-                ActionRequest::Usage(paths.into_iter().map(PathBuf::from).collect())
-            }
+            LlmAction::Usage { paths } => ActionRequest::Usage(ScanRequest::paths(
+                paths.into_iter().map(PathBuf::from).collect(),
+            )),
             LlmAction::ExportPlan { path } => ActionRequest::ExportPlan(path.map(PathBuf::from)),
             LlmAction::Help => ActionRequest::Help,
             LlmAction::Quit => ActionRequest::Quit,

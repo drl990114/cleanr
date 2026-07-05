@@ -60,17 +60,28 @@ Finds broader candidates that should be reviewed manually:
 
 These rules are intentionally medium or low confidence and start unselected.
 
+### `builtin-system`
+
+Finds known user-level system cleanup candidates:
+
+- browser cache directories for common browsers;
+- application cache directories;
+- large temporary files, logs, and Downloads files.
+
+Only high-confidence browser cache directories are preselected. Application
+caches, temporary files, logs, and Downloads are review-only by default.
+
 ## Enable or disable packs
 
 Only IDs in `cleanup.enabled_rule_packs` are loaded:
 
 ```toml
 [cleanup]
-enabled_rule_packs = ["builtin-dev"]
+enabled_rule_packs = ["builtin-dev", "builtin-general", "builtin-system"]
 ```
 
-Removing `builtin-general` is useful when you want Cleanr to focus only on
-developer caches.
+Removing `builtin-general` and `builtin-system` is useful when you want Cleanr
+to focus only on developer caches.
 
 Run `/rules` inside the TUI to inspect the active packs and rules.
 

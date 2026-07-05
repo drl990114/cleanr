@@ -32,12 +32,13 @@ const FeatureList: FeatureItem[] = [
     ),
   },
   {
-    title: <Translate>Built for developer caches</Translate>,
+    title: <Translate>Built for known cleanup locations</Translate>,
     Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
     description: (
       <Translate>
-        Built-in rules understand common dependency, build, and package
-        caches. Declarative plugins add more without executing code by default.
+        Built-in rules understand common dependency, build, package, browser,
+        and application caches. Declarative plugins add more without executing
+        code by default.
       </Translate>
     ),
   },

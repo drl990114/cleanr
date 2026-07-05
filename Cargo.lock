@@ -341,6 +341,7 @@ dependencies = [
  "anyhow",
  "async-openai",
  "cleanr-config",
+ "cleanr-core",
  "ollama-rs",
  "serde",
  "serde_json",
@@ -375,6 +376,7 @@ name = "cleanr-config"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "cleanr-core",
  "dirs",
  "schemars",
  "serde",

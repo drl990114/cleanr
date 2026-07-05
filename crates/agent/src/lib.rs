@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use cleanr_config::AgentBackend;
+use cleanr_core::{GlobalScanKind, ScanRequest};
 use serde::{Deserialize, Serialize};
 
 #[cfg(any(feature = "openai", feature = "ollama"))]
@@ -26,7 +27,7 @@ pub fn create_agent(config: &cleanr_config::AgentConfig) -> Result<Box<dyn Agent
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionRequest {
-    Scan(Vec<PathBuf>),
+    Scan(ScanRequest),
     Review,
     Plan,
     Clean { intent: CleanupIntent },
@@ -35,7 +36,7 @@ pub enum ActionRequest {
     Plugins,
     Languages,
     Tasks,
-    Usage(Vec<PathBuf>),
+    Usage(ScanRequest),
     ExportPlan(Option<PathBuf>),
     Help,
     Quit,
@@ -108,7 +109,10 @@ impl AgentProvider for LocalAgent {
         {
             return Ok(AgentResponse {
                 message: "I'll scan the current root and open the review plan.".to_string(),
-                actions: vec![ActionRequest::Scan(Vec::new()), ActionRequest::Review],
+                actions: vec![
+                    ActionRequest::Scan(ScanRequest::default()),
+                    ActionRequest::Review,
+                ],
             });
         }
 
@@ -222,10 +226,10 @@ pub fn parse_slash_command(input: &str) -> Result<ActionRequest> {
         bail!("empty command");
     }
     let command = parts.remove(0);
-    let args = parts.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    let args = parts;
 
     match command.as_str() {
-        "/scan" => Ok(ActionRequest::Scan(args)),
+        "/scan" => Ok(ActionRequest::Scan(parse_scan_request(args)?)),
         "/review" => Ok(ActionRequest::Review),
         "/plan" => Ok(ActionRequest::Plan),
         "/clean" => Ok(ActionRequest::Clean {
@@ -240,12 +244,43 @@ pub fn parse_slash_command(input: &str) -> Result<ActionRequest> {
         "/plugins" => Ok(ActionRequest::Plugins),
         "/languages" | "/lang" => Ok(ActionRequest::Languages),
         "/tasks" => Ok(ActionRequest::Tasks),
-        "/usage" | "/stats" => Ok(ActionRequest::Usage(args)),
-        "/export-plan" => Ok(ActionRequest::ExportPlan(args.first().cloned())),
+        "/usage" | "/stats" => Ok(ActionRequest::Usage(parse_scan_request(args)?)),
+        "/export-plan" => Ok(ActionRequest::ExportPlan(args.first().map(PathBuf::from))),
         "/help" => Ok(ActionRequest::Help),
         "/quit" | "/q" => Ok(ActionRequest::Quit),
         other => bail!("unknown command: {other}"),
     }
+}
+
+fn parse_scan_request(args: Vec<String>) -> Result<ScanRequest> {
+    let mut request = ScanRequest::default();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--global" {
+            request.include_global = true;
+        } else if arg == "--global-kind" {
+            index += 1;
+            let Some(kind) = args.get(index) else {
+                bail!("--global-kind requires a value");
+            };
+            request.include_global = true;
+            request.global_kinds.push(parse_global_kind(kind)?);
+        } else if let Some(kind) = arg.strip_prefix("--global-kind=") {
+            request.include_global = true;
+            request.global_kinds.push(parse_global_kind(kind)?);
+        } else {
+            request.paths.push(PathBuf::from(arg));
+        }
+        index += 1;
+    }
+    request.global_kinds.sort();
+    request.global_kinds.dedup();
+    Ok(request)
+}
+
+fn parse_global_kind(value: &str) -> Result<GlobalScanKind> {
+    value.parse().map_err(anyhow::Error::msg)
 }
 
 fn split_command(input: &str) -> Result<Vec<String>> {
@@ -293,15 +328,27 @@ fn split_command(input: &str) -> Result<Vec<String>> {
 pub fn command_palette(has_scan_results: bool) -> Vec<CommandInfo> {
     vec![
         CommandInfo {
-            name: "/scan [path...] [--global]",
-            description: "Scan one or more roots",
+            name: "/scan [path...]",
+            description: "Scan current or specified roots",
             description_key: "command_scan",
             requires_scan: false,
         },
         CommandInfo {
-            name: "/usage [path...] [--global]",
-            description: "Scan roots and show disk usage summary",
+            name: "/scan --global",
+            description: "Scan all known system cleanup locations",
+            description_key: "command_scan_global",
+            requires_scan: false,
+        },
+        CommandInfo {
+            name: "/usage [path...]",
+            description: "Scan current or specified roots and show usage",
             description_key: "command_usage",
+            requires_scan: false,
+        },
+        CommandInfo {
+            name: "/usage --global",
+            description: "Scan known system cleanup locations and show usage",
+            description_key: "command_usage_global",
             requires_scan: false,
         },
         CommandInfo {
@@ -409,7 +456,10 @@ mod tests {
         let action = parse_slash_command("/scan . /tmp").expect("parse");
         assert_eq!(
             action,
-            ActionRequest::Scan(vec![PathBuf::from("."), PathBuf::from("/tmp")])
+            ActionRequest::Scan(ScanRequest::paths(vec![
+                PathBuf::from("."),
+                PathBuf::from("/tmp")
+            ]))
         );
     }
 
@@ -420,11 +470,14 @@ mod tests {
                 .expect("parse");
         assert_eq!(
             action,
-            ActionRequest::Scan(vec![
-                PathBuf::from("/tmp/project with spaces"),
-                PathBuf::from("/tmp/other path"),
-                PathBuf::from("--global"),
-            ])
+            ActionRequest::Scan(ScanRequest {
+                paths: vec![
+                    PathBuf::from("/tmp/project with spaces"),
+                    PathBuf::from("/tmp/other path"),
+                ],
+                include_global: true,
+                global_kinds: Vec::new(),
+            })
         );
 
         assert_eq!(
@@ -432,6 +485,20 @@ mod tests {
             ActionRequest::ExportPlan(Some(PathBuf::from("plans/cleanr plan.json")))
         );
         assert!(parse_slash_command(r#"/scan "unterminated"#).is_err());
+    }
+
+    #[test]
+    fn parses_global_scan_kinds() {
+        assert_eq!(
+            parse_slash_command("/scan --global-kind browser-caches --global-kind logs")
+                .expect("parse"),
+            ActionRequest::Scan(ScanRequest {
+                paths: Vec::new(),
+                include_global: true,
+                global_kinds: vec![GlobalScanKind::BrowserCaches, GlobalScanKind::Logs],
+            })
+        );
+        assert!(parse_slash_command("/scan --global-kind unknown").is_err());
     }
 
     #[test]
@@ -449,15 +516,18 @@ mod tests {
     fn parses_usage_command_aliases() {
         assert_eq!(
             parse_slash_command("/usage").expect("parse"),
-            ActionRequest::Usage(Vec::new())
+            ActionRequest::Usage(ScanRequest::default())
         );
         assert_eq!(
             parse_slash_command("/stats").expect("parse"),
-            ActionRequest::Usage(Vec::new())
+            ActionRequest::Usage(ScanRequest::default())
         );
         assert_eq!(
             parse_slash_command("/usage /tmp .").expect("parse"),
-            ActionRequest::Usage(vec![PathBuf::from("/tmp"), PathBuf::from(".")])
+            ActionRequest::Usage(ScanRequest::paths(vec![
+                PathBuf::from("/tmp"),
+                PathBuf::from(".")
+            ]))
         );
     }
 
@@ -483,6 +553,12 @@ mod tests {
         let before_scan = command_palette(false);
         assert!(before_scan.iter().all(|command| !command.requires_scan));
         assert!(!before_scan.iter().any(|command| command.name == "/review"));
+        assert!(before_scan.iter().any(|command| {
+            command.name == "/scan --global" && command.description_key == "command_scan_global"
+        }));
+        assert!(before_scan.iter().any(|command| {
+            command.name == "/usage --global" && command.description_key == "command_usage_global"
+        }));
 
         let after_scan = command_palette(true);
         assert!(after_scan.iter().any(|command| command.name == "/review"));

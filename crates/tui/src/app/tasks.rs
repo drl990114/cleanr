@@ -100,28 +100,34 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn start_scan(&mut self, paths: Vec<PathBuf>) {
-        self.start_scan_for_view(paths, View::Scan);
+    pub(crate) fn start_scan(&mut self, request: ScanRequest) {
+        self.start_scan_for_view(request, View::Scan);
     }
 
-    pub(crate) fn start_scan_for_view(&mut self, paths: Vec<PathBuf>, view: View) {
+    pub(crate) fn start_scan_for_view(&mut self, mut request: ScanRequest, view: View) {
         if self.scan_rx.is_some() {
             self.status = self.i18n.t("status_scan_already_running");
             return;
         }
-        if !paths.is_empty() {
-            let mut requested = paths;
-            let include_global = requested.iter().any(|path| path.as_os_str() == "--global");
-            requested.retain(|path| path.as_os_str() != "--global");
-            if include_global {
-                requested.extend(developer_cache_roots());
-            }
-            if requested.is_empty() {
-                self.status = self.i18n.t("status_no_global_caches");
+        if request.paths.is_empty() && !request.include_global {
+            request.paths = self.roots.clone();
+        }
+        let resolved = match resolve_scan_roots(&request, &self.config.scan.global_kinds) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                self.status = if error.to_string().contains(NO_GLOBAL_SCAN_ROOTS) {
+                    self.i18n.t("status_no_global_caches")
+                } else {
+                    error.to_string()
+                };
                 return;
             }
-            self.roots = requested;
+        };
+        if resolved.roots.is_empty() {
+            self.status = self.i18n.t("status_no_global_caches");
+            return;
         }
+        self.roots = resolved.roots;
 
         let roots = self.roots.clone();
         let options = ScanOptions {
@@ -165,13 +171,13 @@ impl Workbench {
         }
     }
 
-    pub(crate) fn start_usage_scan(&mut self, paths: Vec<PathBuf>) {
+    pub(crate) fn start_usage_scan(&mut self, request: ScanRequest) {
         if self.scan_rx.is_some() {
             self.status = self.i18n.t("status_scan_already_running");
             return;
         }
         self.usage_after_scan = true;
-        self.start_scan_for_view(paths, View::Usage);
+        self.start_scan_for_view(request, View::Usage);
     }
 
     pub(crate) fn scan_progress_status(&self, progress: &ScanProgress) -> String {

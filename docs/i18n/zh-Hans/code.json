@@ -326,8 +326,8 @@
     "message": "标签",
     "description": "The title of the tag list page"
   },
-  "Review developer caches, reclaim disk space, and keep a path back.": {
-    "message": "审阅开发者缓存，释放磁盘空间，同时保留恢复路径。"
+  "Review caches and system cleanup candidates, reclaim disk space, and keep a path back.": {
+    "message": "审阅缓存和系统清理候选项，释放磁盘空间，同时保留恢复路径。"
   },
   "Install and start": {
     "message": "安装并开始使用"
@@ -347,10 +347,10 @@
   "Selected items go to the system trash. Cleanup manifests keep a local, auditable path to restore supported platforms.": {
     "message": "已选内容会进入系统回收站；清理清单为受支持的平台保留本地、可审计的恢复路径。"
   },
-  "Built for developer caches": {
-    "message": "专注开发者缓存"
+  "Built for known cleanup locations": {
+    "message": "面向已知清理位置"
   },
-  "Built-in rules understand common dependency, build, and package caches. Declarative plugins add more without executing code by default.": {
-    "message": "内置规则理解常见依赖、构建和包缓存；声明式插件默认无需执行代码即可扩展覆盖范围。"
+  "Built-in rules understand common dependency, build, package, browser, and application caches. Declarative plugins add more without executing code by default.": {
+    "message": "内置规则理解常见依赖、构建、包、浏览器和应用缓存；声明式插件默认无需执行代码即可扩展覆盖范围。"
   }
 }

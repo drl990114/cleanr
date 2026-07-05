@@ -9,17 +9,55 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use cleanr_core::{EntryKind, ScanEntry, ScanSummary};
+use cleanr_core::{EntryKind, GlobalScanKind, ScanEntry, ScanRequest, ScanSummary};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use walkdir::WalkDir;
 
 pub const SCAN_CANCELLED: &str = "scan cancelled";
+pub const NO_GLOBAL_SCAN_ROOTS: &str = "no system cleanup locations were found";
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
     pub stay_on_filesystem: bool,
     pub ignore_dirs: Vec<PathBuf>,
     pub ignore_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GlobalScanRoot {
+    pub path: PathBuf,
+    pub kind: GlobalScanKind,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GlobalScanEnvironment {
+    pub home_dir: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
+    pub data_local_dir: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
+    pub temp_dir: Option<PathBuf>,
+    pub download_dir: Option<PathBuf>,
+}
+
+impl GlobalScanEnvironment {
+    #[must_use]
+    pub fn current() -> Self {
+        Self {
+            home_dir: dirs::home_dir(),
+            cache_dir: dirs::cache_dir(),
+            data_local_dir: dirs::data_local_dir(),
+            data_dir: dirs::data_dir(),
+            temp_dir: Some(std::env::temp_dir()),
+            download_dir: dirs::download_dir(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResolvedScanRoots {
+    pub roots: Vec<PathBuf>,
+    pub global_roots: Vec<GlobalScanRoot>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,6 +88,94 @@ pub struct ScanProgress {
 pub struct ScanError {
     pub path: Option<PathBuf>,
     pub message: String,
+}
+
+pub fn resolve_scan_roots(
+    request: &ScanRequest,
+    configured_global_kinds: &[GlobalScanKind],
+) -> Result<ResolvedScanRoots> {
+    resolve_scan_roots_with_env(
+        request,
+        configured_global_kinds,
+        &GlobalScanEnvironment::current(),
+    )
+}
+
+pub fn resolve_scan_roots_with_env(
+    request: &ScanRequest,
+    configured_global_kinds: &[GlobalScanKind],
+    environment: &GlobalScanEnvironment,
+) -> Result<ResolvedScanRoots> {
+    let mut roots = request.paths.clone();
+    let mut global_roots = Vec::new();
+    if request.include_global {
+        let global_kinds = if request.global_kinds.is_empty() {
+            configured_global_kinds
+        } else {
+            &request.global_kinds
+        };
+        global_roots = discover_global_scan_roots(global_kinds, environment);
+        roots.extend(global_roots.iter().map(|root| root.path.clone()));
+    }
+
+    if roots.is_empty() {
+        if request.include_global {
+            bail!(NO_GLOBAL_SCAN_ROOTS);
+        }
+        roots.push(std::env::current_dir()?);
+    }
+
+    Ok(ResolvedScanRoots {
+        roots: normalize_roots(roots),
+        global_roots,
+    })
+}
+
+#[must_use]
+pub fn discover_global_scan_roots(
+    kinds: &[GlobalScanKind],
+    environment: &GlobalScanEnvironment,
+) -> Vec<GlobalScanRoot> {
+    let mut roots = Vec::new();
+    if wants(kinds, GlobalScanKind::DeveloperCaches) {
+        push_developer_cache_roots(environment, &mut roots);
+    }
+    if wants(kinds, GlobalScanKind::BrowserCaches) {
+        push_browser_cache_roots(environment, &mut roots);
+    }
+    if wants(kinds, GlobalScanKind::AppCaches) {
+        push_app_cache_roots(environment, &mut roots);
+    }
+    if wants(kinds, GlobalScanKind::TempFiles) {
+        if let Some(temp) = &environment.temp_dir {
+            push_global_root(
+                &mut roots,
+                temp,
+                GlobalScanKind::TempFiles,
+                "User temporary files",
+            );
+        }
+    }
+    if wants(kinds, GlobalScanKind::Logs) {
+        push_log_roots(environment, &mut roots);
+    }
+    if wants(kinds, GlobalScanKind::Downloads) {
+        let download_dir = environment.download_dir.clone().or_else(|| {
+            environment
+                .home_dir
+                .as_ref()
+                .map(|home| home.join("Downloads"))
+        });
+        if let Some(download_dir) = download_dir {
+            push_global_root(
+                &mut roots,
+                &download_dir,
+                GlobalScanKind::Downloads,
+                "Downloads",
+            );
+        }
+    }
+    normalize_global_roots(roots, environment)
 }
 
 pub fn scan_paths(paths: &[PathBuf], options: &ScanOptions) -> Result<ScanReport> {
@@ -356,46 +482,303 @@ fn normalize_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
     normalized
 }
 
+fn wants(kinds: &[GlobalScanKind], kind: GlobalScanKind) -> bool {
+    kinds.contains(&kind)
+}
+
+fn push_global_root(
+    roots: &mut Vec<GlobalScanRoot>,
+    path: &Path,
+    kind: GlobalScanKind,
+    label: impl Into<String>,
+) {
+    roots.push(GlobalScanRoot {
+        path: path.to_path_buf(),
+        kind,
+        label: label.into(),
+    });
+}
+
+fn push_developer_cache_roots(
+    environment: &GlobalScanEnvironment,
+    roots: &mut Vec<GlobalScanRoot>,
+) {
+    if let Some(home) = &environment.home_dir {
+        for (path, label) in [
+            (home.join(".cargo").join("registry"), "Cargo registry cache"),
+            (home.join(".cargo").join("git"), "Cargo Git cache"),
+            (home.join(".npm"), "npm cache"),
+            (home.join(".cache").join("pnpm"), "pnpm cache"),
+            (home.join(".cache").join("yarn"), "Yarn cache"),
+            (home.join(".cache").join("pip"), "pip cache"),
+            (home.join(".cache").join("uv"), "uv cache"),
+            (
+                home.join(".local").join("share").join("pnpm").join("store"),
+                "pnpm store",
+            ),
+            (home.join(".gradle").join("caches"), "Gradle cache"),
+            (home.join(".m2").join("repository"), "Maven repository"),
+            (home.join("go").join("pkg").join("mod"), "Go module cache"),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::DeveloperCaches, label);
+        }
+
+        #[cfg(target_os = "macos")]
+        for (path, label) in [
+            (home.join("Library").join("Caches").join("pip"), "pip cache"),
+            (home.join("Library").join("Caches").join("uv"), "uv cache"),
+            (
+                home.join("Library").join("Caches").join("Yarn"),
+                "Yarn cache",
+            ),
+            (
+                home.join("Library").join("pnpm").join("store"),
+                "pnpm store",
+            ),
+            (
+                home.join("Library")
+                    .join("Developer")
+                    .join("Xcode")
+                    .join("DerivedData"),
+                "Xcode DerivedData",
+            ),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::DeveloperCaches, label);
+        }
+    }
+
+    if let Some(cache) = &environment.cache_dir {
+        for (path, label) in [
+            (cache.join("npm"), "npm cache"),
+            (cache.join("pnpm"), "pnpm cache"),
+            (cache.join("yarn"), "Yarn cache"),
+            (cache.join("pip"), "pip cache"),
+            (cache.join("uv"), "uv cache"),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::DeveloperCaches, label);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local) = &environment.data_local_dir {
+        for (path, label) in [
+            (local.join("npm-cache"), "npm cache"),
+            (local.join("Yarn").join("Cache"), "Yarn cache"),
+            (local.join("pip").join("Cache"), "pip cache"),
+            (local.join("uv").join("cache"), "uv cache"),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::DeveloperCaches, label);
+        }
+    }
+}
+
+fn push_browser_cache_roots(environment: &GlobalScanEnvironment, roots: &mut Vec<GlobalScanRoot>) {
+    if let Some(home) = &environment.home_dir {
+        #[cfg(target_os = "macos")]
+        for (path, label) in [
+            (
+                home.join("Library")
+                    .join("Caches")
+                    .join("Google")
+                    .join("Chrome"),
+                "Chrome cache",
+            ),
+            (
+                home.join("Library").join("Caches").join("Chromium"),
+                "Chromium cache",
+            ),
+            (
+                home.join("Library").join("Caches").join("Microsoft Edge"),
+                "Microsoft Edge cache",
+            ),
+            (
+                home.join("Library").join("Caches").join("Firefox"),
+                "Firefox cache",
+            ),
+            (
+                home.join("Library").join("Caches").join("com.apple.Safari"),
+                "Safari cache",
+            ),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::BrowserCaches, label);
+        }
+
+        #[cfg(all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        ))]
+        for (path, label) in [
+            (home.join(".cache").join("google-chrome"), "Chrome cache"),
+            (home.join(".cache").join("chromium"), "Chromium cache"),
+            (
+                home.join(".cache").join("microsoft-edge"),
+                "Microsoft Edge cache",
+            ),
+            (
+                home.join(".cache").join("mozilla").join("firefox"),
+                "Firefox cache",
+            ),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::BrowserCaches, label);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local) = &environment.data_local_dir {
+        for (path, label) in [
+            (
+                local
+                    .join("Google")
+                    .join("Chrome")
+                    .join("User Data")
+                    .join("Default")
+                    .join("Cache"),
+                "Chrome cache",
+            ),
+            (
+                local
+                    .join("Microsoft")
+                    .join("Edge")
+                    .join("User Data")
+                    .join("Default")
+                    .join("Cache"),
+                "Microsoft Edge cache",
+            ),
+            (
+                local.join("Mozilla").join("Firefox").join("Profiles"),
+                "Firefox cache",
+            ),
+        ] {
+            push_global_root(roots, &path, GlobalScanKind::BrowserCaches, label);
+        }
+    }
+}
+
+fn push_app_cache_roots(environment: &GlobalScanEnvironment, roots: &mut Vec<GlobalScanRoot>) {
+    if let Some(cache) = &environment.cache_dir {
+        push_global_root(
+            roots,
+            cache,
+            GlobalScanKind::AppCaches,
+            "Application caches",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(home) = &environment.home_dir {
+        push_global_root(
+            roots,
+            &home.join("Library").join("Caches"),
+            GlobalScanKind::AppCaches,
+            "macOS application caches",
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local) = &environment.data_local_dir {
+        push_global_root(
+            roots,
+            local,
+            GlobalScanKind::AppCaches,
+            "Local application data caches",
+        );
+    }
+}
+
+fn push_log_roots(environment: &GlobalScanEnvironment, roots: &mut Vec<GlobalScanRoot>) {
+    if let Some(home) = &environment.home_dir {
+        #[cfg(target_os = "macos")]
+        push_global_root(
+            roots,
+            &home.join("Library").join("Logs"),
+            GlobalScanKind::Logs,
+            "macOS user logs",
+        );
+
+        #[cfg(all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        ))]
+        push_global_root(
+            roots,
+            &home.join(".local").join("state"),
+            GlobalScanKind::Logs,
+            "User state and logs",
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local) = &environment.data_local_dir {
+        push_global_root(
+            roots,
+            &local.join("CrashDumps"),
+            GlobalScanKind::Logs,
+            "Windows crash dumps",
+        );
+    }
+}
+
+fn normalize_global_roots(
+    mut roots: Vec<GlobalScanRoot>,
+    environment: &GlobalScanEnvironment,
+) -> Vec<GlobalScanRoot> {
+    for root in &mut roots {
+        if let Ok(canonical) = root.path.canonicalize() {
+            root.path = canonical;
+        }
+    }
+    roots.retain(|root| root.path.exists() && allows_global_root(&root.path, environment));
+    roots.sort_by(|a, b| {
+        a.path
+            .components()
+            .count()
+            .cmp(&b.path.components().count())
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+
+    let mut normalized = Vec::<GlobalScanRoot>::new();
+    for root in roots {
+        if normalized
+            .iter()
+            .any(|parent| root.path == parent.path || root.path.starts_with(&parent.path))
+        {
+            continue;
+        }
+        normalized.push(root);
+    }
+    normalized
+}
+
+fn allows_global_root(path: &Path, environment: &GlobalScanEnvironment) -> bool {
+    !is_root_path(path)
+        && !environment
+            .home_dir
+            .as_ref()
+            .is_some_and(|home| home == path)
+        && !environment
+            .data_dir
+            .as_ref()
+            .is_some_and(|data| data == path)
+}
+
+fn is_root_path(path: &Path) -> bool {
+    path.is_absolute() && path.parent().is_none()
+}
+
 #[must_use]
 pub fn developer_cache_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        roots.extend([
-            home.join(".cargo").join("registry"),
-            home.join(".cargo").join("git"),
-            home.join(".npm"),
-            home.join(".cache").join("pnpm"),
-            home.join(".cache").join("yarn"),
-            home.join(".cache").join("pip"),
-            home.join(".cache").join("uv"),
-            home.join(".local").join("share").join("pnpm").join("store"),
-            home.join(".gradle").join("caches"),
-            home.join(".m2").join("repository"),
-            home.join("go").join("pkg").join("mod"),
-        ]);
-        #[cfg(target_os = "macos")]
-        roots.extend([
-            home.join("Library").join("Caches").join("pip"),
-            home.join("Library").join("Caches").join("uv"),
-            home.join("Library").join("Caches").join("Yarn"),
-            home.join("Library").join("pnpm").join("store"),
-            home.join("Library")
-                .join("Developer")
-                .join("Xcode")
-                .join("DerivedData"),
-        ]);
-    }
-    if let Some(cache) = dirs::cache_dir() {
-        roots.extend([
-            cache.join("npm"),
-            cache.join("pnpm"),
-            cache.join("yarn"),
-            cache.join("pip"),
-            cache.join("uv"),
-        ]);
-    }
-    roots.retain(|path| path.exists());
-    normalize_roots(roots)
+    discover_global_scan_roots(
+        &[GlobalScanKind::DeveloperCaches],
+        &GlobalScanEnvironment::current(),
+    )
+    .into_iter()
+    .map(|root| root.path)
+    .collect()
 }
 
 #[derive(Default)]
@@ -606,6 +989,74 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn global_scan_roots_use_environment_and_filter_nested_roots() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let cache = home.join(".cache");
+        let pnpm = cache.join("pnpm");
+        let downloads = home.join("Downloads");
+        fs::create_dir_all(&pnpm).expect("pnpm cache");
+        fs::create_dir_all(&downloads).expect("downloads");
+        let environment = GlobalScanEnvironment {
+            home_dir: Some(home.clone()),
+            cache_dir: Some(cache.clone()),
+            download_dir: Some(downloads.clone()),
+            ..GlobalScanEnvironment::default()
+        };
+
+        let roots = discover_global_scan_roots(
+            &[
+                GlobalScanKind::DeveloperCaches,
+                GlobalScanKind::AppCaches,
+                GlobalScanKind::Downloads,
+            ],
+            &environment,
+        );
+        let cache = cache.canonicalize().expect("canonical cache");
+        let pnpm = pnpm.canonicalize().expect("canonical pnpm");
+        let downloads = downloads.canonicalize().expect("canonical downloads");
+
+        assert!(roots.iter().any(|root| root.path == cache));
+        assert!(roots.iter().any(|root| root.path == downloads));
+        assert!(!roots.iter().any(|root| root.path == pnpm));
+        assert!(!roots.iter().any(|root| root.path == home));
+    }
+
+    #[test]
+    fn global_scan_request_does_not_add_current_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let global_temp = temp.path().join("tmp");
+        fs::create_dir(&global_temp).expect("tmp dir");
+        let environment = GlobalScanEnvironment {
+            temp_dir: Some(global_temp.clone()),
+            ..GlobalScanEnvironment::default()
+        };
+        let request = ScanRequest::global(vec![GlobalScanKind::TempFiles]);
+
+        let resolved = resolve_scan_roots_with_env(&request, &GlobalScanKind::ALL, &environment)
+            .expect("resolve roots");
+
+        assert_eq!(
+            resolved.roots,
+            vec![global_temp.canonicalize().expect("canonical tmp")]
+        );
+    }
+
+    #[test]
+    fn global_scan_request_reports_missing_global_roots() {
+        let request = ScanRequest::global(vec![GlobalScanKind::TempFiles]);
+
+        let error = resolve_scan_roots_with_env(
+            &request,
+            &GlobalScanKind::ALL,
+            &GlobalScanEnvironment::default(),
+        )
+        .expect_err("missing roots");
+
+        assert!(error.to_string().contains(NO_GLOBAL_SCAN_ROOTS));
     }
 
     #[test]

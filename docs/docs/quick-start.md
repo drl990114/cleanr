@@ -87,7 +87,7 @@ Review each candidate's reason and risk note before confirming.
 
 :::
 
-## Scan known developer caches
+## Scan known system cleanup locations
 
 Press `/`, type the following command, and press `Enter`:
 
@@ -95,8 +95,15 @@ Press `/`, type the following command, and press `Enter`:
 /scan --global
 ```
 
-This searches known cache locations for the current platform. It does not mean
-"scan the entire disk."
+This searches known user-level cleanup locations for the current platform,
+including developer caches, browser caches, app caches, temporary files, logs,
+and Downloads. It does not mean "scan the entire disk."
+
+To narrow the global scan, add one or more categories:
+
+```text
+/scan --global-kind browser-caches --global-kind logs
+```
 
 ## Use Simplified Chinese
 

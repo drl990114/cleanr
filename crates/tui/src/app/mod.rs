@@ -15,9 +15,11 @@ use cleanr_agent::{
 };
 use cleanr_config::{Config, default_config_path, default_state_dir};
 use cleanr_core::{
-    CleanupPlan, SafetyPolicy, ScanEntry, ScanSummary, build_cleanup_plan_with_policy,
+    CleanupPlan, SafetyPolicy, ScanEntry, ScanRequest, ScanSummary, build_cleanup_plan_with_policy,
 };
-use cleanr_fs::{SCAN_CANCELLED, ScanOptions, ScanPhase, ScanProgress, developer_cache_roots};
+use cleanr_fs::{
+    NO_GLOBAL_SCAN_ROOTS, SCAN_CANCELLED, ScanOptions, ScanPhase, ScanProgress, resolve_scan_roots,
+};
 use cleanr_i18n::I18n;
 use cleanr_plugin_api::PluginDiagnostic;
 use cleanr_rules::RuleRegistry;

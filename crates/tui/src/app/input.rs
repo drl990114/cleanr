@@ -110,13 +110,13 @@ impl Workbench {
                 self.clear_pending();
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
-                self.start_scan(Vec::new());
+                self.start_scan(ScanRequest::default());
                 self.clear_pending();
             }
             KeyCode::Char('u') | KeyCode::Char('U')
                 if !key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.start_usage_scan(Vec::new());
+                self.start_usage_scan(ScanRequest::default());
                 self.clear_pending();
             }
             KeyCode::Char('c') | KeyCode::Char('C') => {

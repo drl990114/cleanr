@@ -41,11 +41,12 @@ cleanr --config ./cleanr.toml ~/projects
 stay_on_filesystem = false
 ignore_dirs = []
 ignore_patterns = ["**/.git", "**/.git/**"]
+global_kinds = ["developer-caches", "browser-caches", "app-caches", "temp-files", "logs", "downloads"]
 
 [cleanup]
 default_action = "trash"
 require_confirm = true
-enabled_rule_packs = ["builtin-dev", "builtin-general"]
+enabled_rule_packs = ["builtin-dev", "builtin-general", "builtin-system"]
 
 [agent]
 provider = "local"
@@ -91,6 +92,7 @@ cleanr config set i18n.locale zh-CN
 | `stay_on_filesystem` | `false` | 为 `true` 时不跨文件系统边界 |
 | `ignore_dirs` | `[]` | 需要跳过的精确目录路径 |
 | `ignore_patterns` | Git 元数据 glob | 同时匹配绝对路径和根目录相对路径的 glob |
+| `global_kinds` | 全部内置分类 | `/scan --global` 使用的系统清理分类 |
 
 已知绝对目录适合放入 `ignore_dirs`，重复出现的目录名或布局适合使用
 `ignore_patterns`：

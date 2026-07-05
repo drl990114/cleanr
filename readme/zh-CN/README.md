@@ -48,7 +48,7 @@ cleanr
 cleanr ~/projects ~/Downloads
 ```
 
-进入 TUI 后，按 `s` 扫描，按 `r` 审阅候选项，按 `space` 选择或取消选择，按 `c` 确认清理。使用 `/scan --global` 可以检查已知开发者缓存位置；平台支持时，可使用 `/restore` 恢复历史清理运行。
+进入 TUI 后，按 `s` 扫描，按 `r` 审阅候选项，按 `space` 选择或取消选择，按 `c` 确认清理。使用 `/scan --global` 可以检查已知系统清理位置；平台支持时，可使用 `/restore` 恢复历史清理运行。
 
 在 TUI 中按 `?` 可查看快捷键帮助。
 

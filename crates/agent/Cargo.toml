@@ -18,6 +18,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 cleanr-config = { version = "0.8.0", path = "../config" }
+cleanr-core = { version = "0.8.0", path = "../core" }
 async-openai = { workspace = true, optional = true }
 ollama-rs = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }

@@ -2,7 +2,9 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use chrono::{DateTime, Utc};
@@ -23,13 +25,103 @@ pub enum Confidence {
     High,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum EntryKind {
     File,
     Directory,
     Symlink,
     Other,
+}
+
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum GlobalScanKind {
+    DeveloperCaches,
+    BrowserCaches,
+    AppCaches,
+    TempFiles,
+    Logs,
+    Downloads,
+}
+
+impl GlobalScanKind {
+    pub const ALL: [Self; 6] = [
+        Self::DeveloperCaches,
+        Self::BrowserCaches,
+        Self::AppCaches,
+        Self::TempFiles,
+        Self::Logs,
+        Self::Downloads,
+    ];
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DeveloperCaches => "developer-caches",
+            Self::BrowserCaches => "browser-caches",
+            Self::AppCaches => "app-caches",
+            Self::TempFiles => "temp-files",
+            Self::Logs => "logs",
+            Self::Downloads => "downloads",
+        }
+    }
+}
+
+impl fmt::Display for GlobalScanKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for GlobalScanKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "developer-caches" => Ok(Self::DeveloperCaches),
+            "browser-caches" => Ok(Self::BrowserCaches),
+            "app-caches" => Ok(Self::AppCaches),
+            "temp-files" => Ok(Self::TempFiles),
+            "logs" => Ok(Self::Logs),
+            "downloads" => Ok(Self::Downloads),
+            _ => Err(format!("unsupported global scan kind: {value}")),
+        }
+    }
+}
+
+#[must_use]
+pub fn default_global_scan_kinds() -> Vec<GlobalScanKind> {
+    GlobalScanKind::ALL.to_vec()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(default)]
+pub struct ScanRequest {
+    pub paths: Vec<PathBuf>,
+    pub include_global: bool,
+    pub global_kinds: Vec<GlobalScanKind>,
+}
+
+impl ScanRequest {
+    #[must_use]
+    pub fn paths(paths: Vec<PathBuf>) -> Self {
+        Self {
+            paths,
+            ..Self::default()
+        }
+    }
+
+    #[must_use]
+    pub fn global(global_kinds: Vec<GlobalScanKind>) -> Self {
+        Self {
+            include_global: true,
+            global_kinds,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

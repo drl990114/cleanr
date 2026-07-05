@@ -1,6 +1,6 @@
 # Cleanr
 
-TUI-first, reviewable disk cleanup for developer caches.
+TUI-first, reviewable disk cleanup for rebuildable caches and system cleanup locations.
 
 [English](readme/en/README.md) | [Simplified Chinese](readme/zh-CN/README.md) | [Documentation](docs/) | [Contributing](CONTRIBUTING.md)
 
@@ -12,8 +12,9 @@ and moves selected items to the operating system trash.
 ## Features
 
 - Keyboard-driven scan, review, cleanup, and restore workflow.
-- Built-in rules for common developer caches, build output, package-manager
-  caches, large downloads, logs, and temporary files.
+- Built-in rules for common developer caches, browser caches, application
+  caches, build output, package-manager caches, large downloads, logs, and
+  temporary files.
 - Reviewable cleanup plans with size, confidence, reason, and risk notes for
   every candidate.
 - Conservative default selection: only high-confidence items from built-in or
@@ -60,8 +61,8 @@ cleanr ~/projects ~/Downloads
 
 Inside the TUI, press `s` to scan, `r` to review candidates, `space` to select
 or deselect an item, and `c` to confirm cleanup. Use `/scan --global` to inspect
-known developer cache locations and `/restore` to restore a previous cleanup
-run when the platform supports it.
+known system cleanup locations and `/restore` to restore a previous cleanup run
+when the platform supports it.
 
 Press `?` in the TUI for keyboard help.
 

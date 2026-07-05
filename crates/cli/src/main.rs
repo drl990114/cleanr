@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use cleanr_core::{GlobalScanKind, ScanRequest};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -46,9 +47,13 @@ enum Command {
         #[arg(value_parser)]
         paths: Vec<PathBuf>,
 
-        /// Include known developer cache locations.
+        /// Include known system cleanup locations.
         #[arg(long)]
         global: bool,
+
+        /// Include one global system cleanup category. May be repeated.
+        #[arg(long = "global-kind")]
+        global_kinds: Vec<GlobalScanKind>,
 
         /// Print a JSON scan report.
         #[arg(long)]
@@ -61,9 +66,13 @@ enum Command {
         #[arg(value_parser)]
         paths: Vec<PathBuf>,
 
-        /// Include known developer cache locations.
+        /// Include known system cleanup locations.
         #[arg(long)]
         global: bool,
+
+        /// Include one global system cleanup category. May be repeated.
+        #[arg(long = "global-kind")]
+        global_kinds: Vec<GlobalScanKind>,
 
         /// Write the JSON plan to this path instead of stdout.
         #[arg(long)]
@@ -76,9 +85,13 @@ enum Command {
         #[arg(value_parser)]
         paths: Vec<PathBuf>,
 
-        /// Include known developer cache locations.
+        /// Include known system cleanup locations.
         #[arg(long)]
         global: bool,
+
+        /// Include one global system cleanup category. May be repeated.
+        #[arg(long = "global-kind")]
+        global_kinds: Vec<GlobalScanKind>,
 
         /// Print the JSON cleanup plan.
         #[arg(long)]
@@ -356,32 +369,32 @@ fn main() -> Result<()> {
             Command::Scan {
                 paths,
                 global,
+                global_kinds,
                 json,
             } => workflow::scan(workflow::ScanCommand {
                 config_path: args.config,
-                paths,
-                include_global: global,
+                request: scan_request(paths, global, global_kinds),
                 json,
             }),
             Command::Plan {
                 paths,
                 global,
+                global_kinds,
                 output,
             } => workflow::plan(workflow::PlanCommand {
                 config_path: args.config,
-                paths,
-                include_global: global,
+                request: scan_request(paths, global, global_kinds),
                 output,
             }),
             Command::DryRun {
                 paths,
                 global,
+                global_kinds,
                 json,
                 output,
             } => workflow::dry_run(workflow::DryRunCommand {
                 config_path: args.config,
-                paths,
-                include_global: global,
+                request: scan_request(paths, global, global_kinds),
                 json,
                 output,
             }),
@@ -555,6 +568,18 @@ fn main() -> Result<()> {
     })
 }
 
+fn scan_request(
+    paths: Vec<PathBuf>,
+    include_global: bool,
+    global_kinds: Vec<GlobalScanKind>,
+) -> ScanRequest {
+    ScanRequest {
+        paths,
+        include_global: include_global || !global_kinds.is_empty(),
+        global_kinds,
+    }
+}
+
 fn init(
     locale: String,
     from_github: bool,
@@ -641,14 +666,17 @@ mod tests {
             "scan",
             "--json",
             "--global",
+            "--global-kind",
+            "browser-caches",
             "/repo/with spaces",
         ])
         .expect("parse scan");
         assert_eq!(scan.config, Some(PathBuf::from("/tmp/cleanr.toml")));
         assert!(matches!(
             scan.command,
-            Some(Command::Scan { paths, global: true, json: true })
+            Some(Command::Scan { paths, global: true, global_kinds, json: true })
                 if paths == vec![PathBuf::from("/repo/with spaces")]
+                    && global_kinds == vec![GlobalScanKind::BrowserCaches]
         ));
 
         let dry_run =
@@ -656,8 +684,9 @@ mod tests {
                 .expect("parse dry-run");
         assert!(matches!(
             dry_run.command,
-            Some(Command::DryRun { paths, global: false, json: false, output: Some(path) })
+            Some(Command::DryRun { paths, global: false, global_kinds, json: false, output: Some(path) })
                 if paths == vec![PathBuf::from("/repo")]
+                    && global_kinds.is_empty()
                     && path.as_path() == std::path::Path::new("/tmp/plan.json")
         ));
 

@@ -29,10 +29,11 @@ Check the following:
 Use `/rules` to inspect loaded rules and `/plugins` to confirm custom bundles
 were discovered.
 
-## `/scan --global` says no cache directories were found
+## `/scan --global` says no cleanup locations were found
 
-The current platform did not report any known global developer cache roots.
-You can still provide paths explicitly:
+The current platform did not report any known user-level system cleanup
+locations for the selected global categories. You can still provide paths
+explicitly:
 
 ```text
 /scan /home/me/.cargo /home/me/.npm

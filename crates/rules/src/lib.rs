@@ -48,6 +48,7 @@ pub struct RuleDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuleMatcher {
+    pub kind: Option<EntryKind>,
     pub dir_name: Option<String>,
     pub path_glob: Option<String>,
     pub file_name: Option<String>,
@@ -140,6 +141,7 @@ impl RulePack {
                 bail!("rule {}:{} has a negative max_age_days", self.id, rule.id);
             }
             let has_matcher = rule.matcher.dir_name.is_some()
+                || rule.matcher.kind.is_some()
                 || rule.matcher.path_glob.is_some()
                 || rule.matcher.file_name.is_some()
                 || rule.matcher.extension.is_some()
@@ -163,6 +165,7 @@ impl RuleRegistry {
         let mut registry = Self::empty();
         registry.add_builtin_plugin(BUILTIN_DEV_MANIFEST, &[BUILTIN_DEV_RULES])?;
         registry.add_builtin_plugin(BUILTIN_GENERAL_MANIFEST, &[BUILTIN_GENERAL_RULES])?;
+        registry.add_builtin_plugin(BUILTIN_SYSTEM_MANIFEST, &[BUILTIN_SYSTEM_RULES])?;
         Ok(registry)
     }
 
@@ -249,7 +252,8 @@ impl RuleRegistry {
             .iter()
             .map(|pack| pack.definition.id.clone())
             .collect::<BTreeSet<_>>();
-        for enabled in &config.cleanup.enabled_rule_packs {
+        let enabled_rule_packs = config.cleanup.effective_enabled_rule_packs();
+        for enabled in &enabled_rule_packs {
             if !loaded_ids.contains(enabled) {
                 registry.diagnostics.push(PluginDiagnostic::warning(
                     "rule-pack-not-found",
@@ -259,9 +263,7 @@ impl RuleRegistry {
             }
         }
         registry.packs.retain(|pack| {
-            config
-                .cleanup
-                .enabled_rule_packs
+            enabled_rule_packs
                 .iter()
                 .any(|enabled| enabled == &pack.definition.id)
         });
@@ -557,6 +559,11 @@ fn matches_rule(
     normalized_path: Option<&str>,
 ) -> bool {
     let matcher = &rule.matcher;
+    if let Some(kind) = matcher.kind
+        && entry.kind != kind
+    {
+        return false;
+    }
     if let Some(dir_name) = &matcher.dir_name
         && (entry.kind != EntryKind::Directory || file_name != Some(dir_name))
     {
@@ -619,6 +626,9 @@ const BUILTIN_GENERAL_MANIFEST: &str =
     include_str!("../builtin-plugins/builtin-general/plugin.toml");
 const BUILTIN_GENERAL_RULES: &str =
     include_str!("../builtin-plugins/builtin-general/rules/general.toml");
+const BUILTIN_SYSTEM_MANIFEST: &str = include_str!("../builtin-plugins/builtin-system/plugin.toml");
+const BUILTIN_SYSTEM_RULES: &str =
+    include_str!("../builtin-plugins/builtin-system/rules/system.toml");
 
 #[cfg(test)]
 mod tests {
@@ -641,6 +651,127 @@ mod tests {
         assert_eq!(hits[0].rule_id, "node-modules");
         assert!(hits[0].default_selected);
         assert_eq!(hits[0].confidence, Confidence::High);
+    }
+
+    #[test]
+    fn builtin_system_rules_match_with_safe_defaults() {
+        let registry = RuleRegistry::builtin().expect("builtin rules load");
+        let browser_cache = ScanEntry {
+            path: PathBuf::from("/Users/me/Library/Caches/Google/Chrome/Default/Cache"),
+            kind: EntryKind::Directory,
+            size_bytes: 2 * 1024 * 1024,
+            modified_at: None,
+            rule_hits: vec![],
+        };
+        let download = ScanEntry {
+            path: PathBuf::from("/Users/me/Downloads/installer.dmg"),
+            kind: EntryKind::File,
+            size_bytes: 200 * 1024 * 1024,
+            modified_at: None,
+            rule_hits: vec![],
+        };
+        let temporary = ScanEntry {
+            path: PathBuf::from("/tmp/export.tmp"),
+            kind: EntryKind::File,
+            size_bytes: 20 * 1024 * 1024,
+            modified_at: None,
+            rule_hits: vec![],
+        };
+
+        let browser_hit = registry
+            .hits_for(&browser_cache)
+            .into_iter()
+            .find(|hit| hit.rule_id == "chrome-cache-directory")
+            .expect("browser hit");
+        assert_eq!(browser_hit.confidence, Confidence::High);
+        assert!(browser_hit.default_selected);
+
+        let download_hit = registry
+            .hits_for(&download)
+            .into_iter()
+            .find(|hit| hit.rule_id == "large-download-file")
+            .expect("download hit");
+        assert_eq!(download_hit.confidence, Confidence::Low);
+        assert!(!download_hit.default_selected);
+
+        let temporary_hit = registry
+            .hits_for(&temporary)
+            .into_iter()
+            .find(|hit| hit.rule_id == "large-temporary-file")
+            .expect("temporary hit");
+        assert_eq!(temporary_hit.confidence, Confidence::Medium);
+        assert!(!temporary_hit.default_selected);
+    }
+
+    #[test]
+    fn matcher_kind_restricts_rule_matches() {
+        let raw = r#"
+        id = "kind-test"
+        name = "Kind Test"
+        version = "1.0.0"
+        description = "Kind matcher"
+        categories = ["cache"]
+
+        [[rules]]
+        id = "directory-cache"
+        label = "Directory Cache"
+        category = "cache"
+        match = { kind = "directory", path_glob = "**/Cache" }
+        confidence = "medium"
+        default_selected = false
+        action = "trash"
+        reason = "cache"
+        risk_note = "review"
+        "#;
+        let mut registry = RuleRegistry::empty();
+        registry
+            .add_pack(
+                RulePack::from_toml(raw).expect("rule pack"),
+                PluginSource::Builtin,
+                TrustLevel::Builtin,
+                None,
+            )
+            .expect("add pack");
+
+        assert!(
+            registry
+                .hits_for(&ScanEntry {
+                    path: PathBuf::from("/repo/Cache"),
+                    kind: EntryKind::Directory,
+                    size_bytes: 1,
+                    modified_at: None,
+                    rule_hits: vec![],
+                })
+                .iter()
+                .any(|hit| hit.rule_id == "directory-cache")
+        );
+        assert!(
+            registry
+                .hits_for(&ScanEntry {
+                    path: PathBuf::from("/repo/Cache"),
+                    kind: EntryKind::File,
+                    size_bytes: 1,
+                    modified_at: None,
+                    rule_hits: vec![],
+                })
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn legacy_default_rule_pack_list_includes_builtin_system() {
+        let mut config = Config::default();
+        config.cleanup.enabled_rule_packs =
+            vec!["builtin-dev".to_string(), "builtin-general".to_string()];
+
+        let registry = RuleRegistry::load(&config).expect("load registry");
+
+        assert!(
+            registry
+                .packs()
+                .iter()
+                .any(|pack| pack.definition.id == "builtin-system")
+        );
     }
 
     #[test]

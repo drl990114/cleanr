@@ -3,7 +3,7 @@ use super::*;
 impl Workbench {
     pub fn dispatch(&mut self, action: ActionRequest) {
         match action {
-            ActionRequest::Scan(paths) => self.start_scan(paths),
+            ActionRequest::Scan(request) => self.start_scan(request),
             ActionRequest::Review => self.review(),
             ActionRequest::Plan => self.build_plan(),
             ActionRequest::Clean { intent } => {
@@ -15,7 +15,7 @@ impl Workbench {
             ActionRequest::Plugins => self.show_plugins(),
             ActionRequest::Languages => self.show_languages(),
             ActionRequest::Tasks => self.show_tasks(),
-            ActionRequest::Usage(paths) => self.start_usage_scan(paths),
+            ActionRequest::Usage(request) => self.start_usage_scan(request),
             ActionRequest::ExportPlan(path) => self.export_plan(path),
             ActionRequest::Help => self.show_help(),
             ActionRequest::Quit => self.should_quit = true,
@@ -356,6 +356,6 @@ impl Workbench {
             return;
         }
         let view = self.view;
-        self.start_scan_for_view(Vec::new(), view);
+        self.start_scan_for_view(ScanRequest::default(), view);
     }
 }

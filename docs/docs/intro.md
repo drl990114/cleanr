@@ -5,15 +5,17 @@ description: Understand what Cleanr cleans, how it keeps cleanup reviewable, and
 
 # Cleanr overview
 
-Cleanr helps you find and remove **rebuildable developer caches** without
-turning disk cleanup into a leap of faith. It runs in your terminal, shows why
-each item matched, and lets you decide what is moved to the system trash.
+Cleanr helps you find and remove **rebuildable caches and reviewable system
+cleanup candidates** without turning disk cleanup into a leap of faith. It runs
+in your terminal, shows why each item matched, and lets you decide what is
+moved to the system trash.
 
 Typical candidates include:
 
 - project dependencies such as `node_modules`;
 - build output such as Rust `target` directories and Xcode `DerivedData`;
 - package-manager caches for Cargo, npm, pnpm, pip, Gradle, and other tools;
+- browser and application caches from known user-level cleanup locations;
 - large downloads, logs, and temporary files that require manual review.
 
 ## The basic workflow

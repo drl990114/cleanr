@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use cleanr_config::{Config, default_config_path, default_state_dir};
-use cleanr_core::{CleanupPlan, SafetyPolicy, build_cleanup_plan_with_policy};
-use cleanr_fs::{ScanOptions, ScanReport, developer_cache_roots, scan_paths};
+use cleanr_core::{CleanupPlan, SafetyPolicy, ScanRequest, build_cleanup_plan_with_policy};
+use cleanr_fs::{ScanOptions, ScanReport, resolve_scan_roots, scan_paths};
 use cleanr_rules::RuleRegistry;
 use cleanr_tasks::{
     ManifestRepository, SystemRestoreExecutor, restore_execution_manifest, restored_run_ids,
@@ -13,22 +13,19 @@ use serde_json::json;
 
 pub struct ScanCommand {
     pub config_path: Option<PathBuf>,
-    pub paths: Vec<PathBuf>,
-    pub include_global: bool,
+    pub request: ScanRequest,
     pub json: bool,
 }
 
 pub struct PlanCommand {
     pub config_path: Option<PathBuf>,
-    pub paths: Vec<PathBuf>,
-    pub include_global: bool,
+    pub request: ScanRequest,
     pub output: Option<PathBuf>,
 }
 
 pub struct DryRunCommand {
     pub config_path: Option<PathBuf>,
-    pub paths: Vec<PathBuf>,
-    pub include_global: bool,
+    pub request: ScanRequest,
     pub json: bool,
     pub output: Option<PathBuf>,
 }
@@ -42,7 +39,7 @@ struct WorkflowScan {
 }
 
 pub fn scan(command: ScanCommand) -> Result<()> {
-    let scan = run_scan(command.config_path, command.paths, command.include_global)?;
+    let scan = run_scan(command.config_path, command.request)?;
     if command.json {
         print_scan_json(&scan.report)?;
     } else {
@@ -66,13 +63,13 @@ pub fn scan(command: ScanCommand) -> Result<()> {
 }
 
 pub fn plan(command: PlanCommand) -> Result<()> {
-    let scan = run_scan(command.config_path, command.paths, command.include_global)?;
+    let scan = run_scan(command.config_path, command.request)?;
     let plan = build_plan(&scan);
     write_or_print_plan(&plan, command.output)
 }
 
 pub fn dry_run(command: DryRunCommand) -> Result<()> {
-    let scan = run_scan(command.config_path, command.paths, command.include_global)?;
+    let scan = run_scan(command.config_path, command.request)?;
     let plan = build_plan(&scan);
     if let Some(path) = command.output {
         write_cleanup_plan(&plan, &path)?;
@@ -134,15 +131,11 @@ pub fn restore_run(run_id: &str, confirm: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_scan(
-    config_path: Option<PathBuf>,
-    paths: Vec<PathBuf>,
-    include_global: bool,
-) -> Result<WorkflowScan> {
+fn run_scan(config_path: Option<PathBuf>, request: ScanRequest) -> Result<WorkflowScan> {
     let config_path_for_policy = config_path.clone().or_else(default_config_path);
     let config = load_config(config_path)?;
     let registry = RuleRegistry::load(&config)?;
-    let roots = resolve_roots(paths, include_global)?;
+    let roots = resolve_scan_roots(&request, &config.scan.global_kinds)?.roots;
     let options = ScanOptions {
         stay_on_filesystem: config.scan.stay_on_filesystem,
         ignore_dirs: config.scan.ignore_dirs.clone(),
@@ -204,21 +197,6 @@ fn load_config(path: Option<PathBuf>) -> Result<Config> {
         Some(path) => Config::load_from(path),
         None => Config::load(),
     }
-}
-
-fn resolve_roots(mut paths: Vec<PathBuf>, include_global: bool) -> Result<Vec<PathBuf>> {
-    if paths.is_empty() {
-        paths.push(std::env::current_dir()?);
-    }
-    if include_global {
-        paths.extend(developer_cache_roots());
-    }
-    paths.sort();
-    paths.dedup();
-    if paths.is_empty() {
-        bail!("no scan roots were provided and no global cache roots were found");
-    }
-    Ok(paths)
 }
 
 fn safety_policy(config: &Config, config_path: Option<PathBuf>) -> SafetyPolicy {

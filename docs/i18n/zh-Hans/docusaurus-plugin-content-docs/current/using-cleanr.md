@@ -22,10 +22,19 @@ cleanr ~/projects/app-one ~/projects/app-two
 /scan /home/me/projects/app-one /home/me/Downloads
 ```
 
-加上 `--global` 可以同时包含已知开发者缓存位置：
+加上 `--global` 可以同时包含已知系统清理位置：
 
 ```text
 /scan /home/me/projects --global
+```
+
+在命令面板中，按 `/`，输入 `global`，再按 `Enter`，即可选择
+`/scan --global` 快捷项，不需要记住参数。
+
+使用 `--global-kind` 可以缩小全局预设范围。传入分类时会自动启用全局扫描：
+
+```text
+/scan --global-kind browser-caches
 ```
 
 TUI 中输入的路径不会经过 Shell 展开，因此 `~` 和环境变量会被当成普通文字。
@@ -101,8 +110,10 @@ cleanr restore run <run-id> --confirm
 
 | 命令 | 作用 |
 | --- | --- |
-| `/scan [path...] [--global]` | 扫描路径，可选包含已知开发者缓存 |
-| `/usage [path...] [--global]` | 扫描并打开磁盘用量摘要 |
+| `/scan [path...] [--global] [--global-kind=<kind>]` | 扫描路径或已知系统清理位置 |
+| `/scan --global` | 扫描所有已知系统清理位置 |
+| `/usage [path...] [--global] [--global-kind=<kind>]` | 扫描并打开磁盘用量摘要 |
+| `/usage --global` | 扫描已知系统清理位置并打开用量摘要 |
 | `/review` | 生成并显示清理候选项 |
 | `/plan` | 生成当前清理计划 |
 | `/clean` | 检查当前选择并请求确认 |

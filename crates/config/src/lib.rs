@@ -9,6 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use cleanr_core::{GlobalScanKind, default_global_scan_kinds};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +30,7 @@ pub struct ScanConfig {
     pub stay_on_filesystem: bool,
     pub ignore_dirs: Vec<PathBuf>,
     pub ignore_patterns: Vec<String>,
+    pub global_kinds: Vec<GlobalScanKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -143,6 +145,7 @@ impl Default for ScanConfig {
             stay_on_filesystem: false,
             ignore_dirs: Vec::new(),
             ignore_patterns: vec!["**/.git".to_string(), "**/.git/**".to_string()],
+            global_kinds: default_global_scan_kinds(),
         }
     }
 }
@@ -152,8 +155,24 @@ impl Default for CleanupConfig {
         Self {
             default_action: CleanupAction::Trash,
             require_confirm: true,
-            enabled_rule_packs: vec!["builtin-dev".to_string(), "builtin-general".to_string()],
+            enabled_rule_packs: default_enabled_rule_packs(),
         }
+    }
+}
+
+impl CleanupConfig {
+    #[must_use]
+    pub fn effective_enabled_rule_packs(&self) -> Vec<String> {
+        let legacy_default = ["builtin-dev", "builtin-general"];
+        if self
+            .enabled_rule_packs
+            .iter()
+            .map(String::as_str)
+            .eq(legacy_default)
+        {
+            return default_enabled_rule_packs();
+        }
+        self.enabled_rule_packs.clone()
     }
 }
 
@@ -223,11 +242,12 @@ impl Config {
             "stay_on_filesystem = false\n",
             "ignore_dirs = []\n",
             "ignore_patterns = [\"**/.git\", \"**/.git/**\"]\n",
+            "global_kinds = [\"developer-caches\", \"browser-caches\", \"app-caches\", \"temp-files\", \"logs\", \"downloads\"]\n",
             "\n",
             "[cleanup]\n",
             "default_action = \"trash\"\n",
             "require_confirm = true\n",
-            "enabled_rule_packs = [\"builtin-dev\", \"builtin-general\"]\n",
+            "enabled_rule_packs = [\"builtin-dev\", \"builtin-general\", \"builtin-system\"]\n",
             "\n",
             "[agent]\n",
             "provider = \"local\"\n",
@@ -278,11 +298,22 @@ impl Config {
             &self.cleanup.enabled_rule_packs,
             "cleanup.enabled_rule_packs cannot contain duplicate rule pack IDs",
         )?;
+        reject_duplicates(
+            &self.scan.global_kinds,
+            "scan.global_kinds cannot contain duplicate global scan kinds",
+        )?;
         Ok(())
     }
 }
 
-fn reject_duplicates(values: &[String], message: &str) -> Result<()> {
+fn default_enabled_rule_packs() -> Vec<String> {
+    ["builtin-dev", "builtin-general", "builtin-system"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn reject_duplicates<T: Ord>(values: &[T], message: &str) -> Result<()> {
     let mut unique = BTreeSet::new();
     if values.iter().any(|value| !unique.insert(value)) {
         bail!("{message}");
@@ -445,6 +476,10 @@ mod tests {
 
         let mut config = Config::default();
         config.cleanup.enabled_rule_packs = vec!["same".to_string(), "same".to_string()];
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.scan.global_kinds = vec![GlobalScanKind::Logs, GlobalScanKind::Logs];
         assert!(config.validate().is_err());
     }
 

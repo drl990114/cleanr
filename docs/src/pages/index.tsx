@@ -19,7 +19,7 @@ function HomepageHeader() {
         </Heading>
         <p className="hero__subtitle">
           <Translate>
-            Review developer caches, reclaim disk space, and keep a path back.
+            Review caches and system cleanup candidates, reclaim disk space, and keep a path back.
           </Translate>
         </p>
         <div className={styles.buttons}>
@@ -43,8 +43,8 @@ export default function Home(): ReactNode {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
-      title="Safe developer cache cleanup"
-      description="Install Cleanr, review developer caches, move selected items to trash, and restore previous cleanup runs.">
+      title="Safe reviewable disk cleanup"
+      description="Install Cleanr, review cleanup candidates, move selected items to trash, and restore previous cleanup runs.">
       <HomepageHeader />
       <main>
         <HomepageFeatures />

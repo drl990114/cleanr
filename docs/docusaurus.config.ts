@@ -6,7 +6,7 @@ import { themes as prismThemes } from 'prism-react-renderer';
 
 const config: Config = {
   title: 'Cleanr',
-  tagline: 'Reviewable, reversible cleanup for developer caches',
+  tagline: 'Reviewable, reversible cleanup for caches and system cleanup locations',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
