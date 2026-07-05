@@ -146,15 +146,15 @@ pub fn discover_global_scan_roots(
     if wants(kinds, GlobalScanKind::AppCaches) {
         push_app_cache_roots(environment, &mut roots);
     }
-    if wants(kinds, GlobalScanKind::TempFiles) {
-        if let Some(temp) = &environment.temp_dir {
-            push_global_root(
-                &mut roots,
-                temp,
-                GlobalScanKind::TempFiles,
-                "User temporary files",
-            );
-        }
+    if wants(kinds, GlobalScanKind::TempFiles)
+        && let Some(temp) = &environment.temp_dir
+    {
+        push_global_root(
+            &mut roots,
+            temp,
+            GlobalScanKind::TempFiles,
+            "User temporary files",
+        );
     }
     if wants(kinds, GlobalScanKind::Logs) {
         push_log_roots(environment, &mut roots);
@@ -756,14 +756,14 @@ fn normalize_global_roots(
 
 fn allows_global_root(path: &Path, environment: &GlobalScanEnvironment) -> bool {
     !is_root_path(path)
-        && !environment
+        && environment
             .home_dir
             .as_ref()
-            .is_some_and(|home| home == path)
-        && !environment
+            .is_none_or(|home| home != path)
+        && environment
             .data_dir
             .as_ref()
-            .is_some_and(|data| data == path)
+            .is_none_or(|data| data != path)
 }
 
 fn is_root_path(path: &Path) -> bool {
