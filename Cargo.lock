@@ -336,7 +336,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cleanr-agent"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-config"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "cleanr-core",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "schemars",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-fs"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-i18n"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "cleanr-config",
@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-plugin-api"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "schemars",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-rules"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-tasks"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "cleanr-tui"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "chrono",
