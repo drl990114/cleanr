@@ -1,6 +1,6 @@
 ---
 sidebar_position: 5
-description: 配置 Cleanr 的扫描忽略、清理确认、Agent、插件、语言和主题。
+description: 配置 Cleanr 的扫描忽略、清理确认、插件、语言和主题。
 ---
 
 # 配置
@@ -48,11 +48,8 @@ default_action = "trash"
 require_confirm = true
 enabled_rule_packs = ["builtin-dev", "builtin-general", "builtin-system"]
 
-[agent]
-provider = "local"
-api_key_env = "CLEANR_API_KEY"
-# endpoint = "https://example.invalid/v1"
-# model = "your-model"
+[recommendations]
+preselect_after_days = 90
 
 [plugins]
 # dirs 默认指向平台配置目录下的 cleanr/plugins
@@ -77,6 +74,7 @@ cleanr config get ui.theme
 cleanr config set ui.theme dark
 cleanr config set scan.stay_on_filesystem true
 cleanr config set cleanup.require_confirm false
+cleanr config set recommendations.preselect_after_days 180
 cleanr config set i18n.locale zh-CN
 ```
 
@@ -114,27 +112,22 @@ ignore_patterns = ["**/.git/**", "**/vendor/**", "**/.venv/**"]
 关闭确认只会改变对话框，执行层仍要求本地用户操作。详见
 [安全与恢复](./safety-and-recovery)。
 
-### `[agent]`
+### `[recommendations]`
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `provider` | `"local"` | `"local"`、`"openai"` 或 `"ollama"` |
-| `endpoint` | 未设置 | 可选的服务端点覆盖 |
-| `model` | 未设置 | 远程 Provider 使用的模型名 |
-| `api_key_env` | `"CLEANR_API_KEY"` | 保存 API Key 的环境变量名称 |
+| `preselect_after_days` | `90` | 用于确定性预选的观测修改时间年龄门槛；`0` 会关闭年龄门槛，接受 `1` 到 `3650` 的值 |
 
-一次配置多个 Agent 字段：
+这是一项共享策略：TUI、`cleanr analyze`、`cleanr plan` 和 `cleanr dry-run` 都会
+使用它。年龄基于观测到的修改时间元数据，而不是已经证实的最后访问时间。时间缺失、
+未来时间、部分或不完整的证据仍会阻止自动预选。
 
-```bash
-cleanr config set-agent \
-  --provider openai \
-  --model your-model \
-  --api-key-env OPENAI_API_KEY
-```
+## 外部本地 AI 工具
 
-密钥应保存在指定环境变量中，不要写入 TOML。OpenAI 和 Ollama 需要相应的
-可选编译功能。官方预编译版本会包含两者；默认 `cargo install` 只包含本地
-Provider。
+Cleanr 不内置模型、Provider、endpoint 或 API Key 配置。同一台机器上的外部
+Agent 可以读取只读的 `cleanr analyze` JSON 契约，但不会因此获得清理能力。报告
+包含配置中的推荐策略快照和真实本地路径，不能作为安全的远程分享格式；交给其他工具前
+请先阅读[证据与隐私](./evidence-and-privacy)。
 
 ### `[plugins]`
 

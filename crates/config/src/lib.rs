@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use cleanr_core::{GlobalScanKind, default_global_scan_kinds};
+use cleanr_core::{GlobalScanKind, MAX_RECOMMENDATION_AGE_DAYS, default_global_scan_kinds};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub scan: ScanConfig,
     pub cleanup: CleanupConfig,
-    pub agent: AgentConfig,
+    pub recommendations: RecommendationConfig,
     pub plugins: PluginConfig,
     pub i18n: I18nConfig,
     pub ui: UiConfig,
@@ -41,13 +41,12 @@ pub struct CleanupConfig {
     pub enabled_rule_packs: Vec<String>,
 }
 
+/// Shared recommendation policy used by the TUI and non-interactive workflows.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct AgentConfig {
-    pub provider: AgentBackend,
-    pub endpoint: Option<String>,
-    pub model: Option<String>,
-    pub api_key_env: String,
+pub struct RecommendationConfig {
+    /// Number of inactive days required for automatic preselection. Zero disables this age gate.
+    pub preselect_after_days: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -75,15 +74,6 @@ pub struct UiConfig {
 pub enum CleanupAction {
     #[default]
     Trash,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentBackend {
-    #[default]
-    Local,
-    Openai,
-    Ollama,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -120,11 +110,6 @@ macro_rules! impl_text_enum {
 }
 
 impl_text_enum!(CleanupAction, {"trash" => CleanupAction::Trash});
-impl_text_enum!(AgentBackend, {
-    "local" => AgentBackend::Local,
-    "openai" => AgentBackend::Openai,
-    "ollama" => AgentBackend::Ollama,
-});
 impl_text_enum!(UiTheme, {
     "auto" => UiTheme::Auto,
     "dark" => UiTheme::Dark,
@@ -160,6 +145,14 @@ impl Default for CleanupConfig {
     }
 }
 
+impl Default for RecommendationConfig {
+    fn default() -> Self {
+        Self {
+            preselect_after_days: 90,
+        }
+    }
+}
+
 impl CleanupConfig {
     #[must_use]
     pub fn effective_enabled_rule_packs(&self) -> Vec<String> {
@@ -173,17 +166,6 @@ impl CleanupConfig {
             return default_enabled_rule_packs();
         }
         self.enabled_rule_packs.clone()
-    }
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        Self {
-            provider: AgentBackend::Local,
-            endpoint: None,
-            model: None,
-            api_key_env: "CLEANR_API_KEY".to_string(),
-        }
     }
 }
 
@@ -249,11 +231,9 @@ impl Config {
             "require_confirm = true\n",
             "enabled_rule_packs = [\"builtin-dev\", \"builtin-general\", \"builtin-system\"]\n",
             "\n",
-            "[agent]\n",
-            "provider = \"local\"\n",
-            "api_key_env = \"CLEANR_API_KEY\"\n",
-            "# endpoint = \"https://example.invalid/v1\"\n",
-            "# model = \"your-model\"\n",
+            "[recommendations]\n",
+            "# Set to 0 to disable the age gate for automatic preselection.\n",
+            "preselect_after_days = 90\n",
             "\n",
             "[plugins]\n",
             "# dirs defaults to ~/.config/cleanr/plugins\n",
@@ -271,8 +251,10 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.agent.api_key_env.trim().is_empty() {
-            bail!("agent.api_key_env cannot be empty");
+        if self.recommendations.preselect_after_days > MAX_RECOMMENDATION_AGE_DAYS {
+            bail!(
+                "recommendations.preselect_after_days must be in 0..={MAX_RECOMMENDATION_AGE_DAYS}"
+            );
         }
         if self
             .plugins
@@ -377,28 +359,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_ai_sdk_reserved_config() {
-        let config: Config = toml::from_str(
-            r#"
-            [agent]
-            provider = "openai"
-            endpoint = "https://example.com/v1"
-            model = "demo"
-            api_key_env = "MY_KEY"
-
-            [i18n]
-            locale = "zh-CN"
-            "#,
-        )
-        .expect("config parses");
-
-        assert_eq!(config.agent.provider, AgentBackend::Openai);
-        assert_eq!(config.agent.api_key_env, "MY_KEY");
-        assert_eq!(config.i18n.locale.as_deref(), Some("zh-CN"));
-        assert!(config.cleanup.require_confirm);
-    }
-
-    #[test]
     fn rejects_unknown_config_fields() {
         assert!(
             toml::from_str::<Config>(
@@ -446,6 +406,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_recommendation_age_above_the_supported_limit() {
+        let mut config = Config::default();
+        config.recommendations.preselect_after_days = MAX_RECOMMENDATION_AGE_DAYS + 1;
+
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn allows_zero_to_disable_the_recommendation_age_gate() {
+        let mut config = Config::default();
+        config.recommendations.preselect_after_days = 0;
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn documented_default_config_matches_runtime_defaults() {
         let documented: Config =
             toml::from_str(Config::default_file_content()).expect("default config parses");
@@ -455,10 +431,6 @@ mod tests {
 
     #[test]
     fn text_enums_are_case_insensitive_and_reject_unknown_values() {
-        assert_eq!(
-            "OpEnAi".parse::<AgentBackend>().expect("provider"),
-            AgentBackend::Openai
-        );
         assert_eq!("DARK".parse::<UiTheme>().expect("theme"), UiTheme::Dark);
         assert!("delete".parse::<CleanupAction>().is_err());
         assert!("system".parse::<UiTheme>().is_err());
@@ -466,10 +438,6 @@ mod tests {
 
     #[test]
     fn validation_rejects_empty_values_and_duplicate_rule_packs() {
-        let mut config = Config::default();
-        config.agent.api_key_env = "  ".to_string();
-        assert!(config.validate().is_err());
-
         let mut config = Config::default();
         config.plugins.trusted = vec!["valid".to_string(), " ".to_string()];
         assert!(config.validate().is_err());
@@ -489,7 +457,7 @@ mod tests {
         let path = temp.path().join("config.toml");
         std::fs::write(&path, "original").expect("seed config");
         let mut config = Config::default();
-        config.agent.api_key_env.clear();
+        config.plugins.trusted = vec![" ".to_string()];
 
         assert!(config.save_to(&path).is_err());
         assert_eq!(

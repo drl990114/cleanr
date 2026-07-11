@@ -661,11 +661,7 @@ mod tests {
         let i18n = I18n::new("zh_CN.UTF-8", BTreeMap::new(), builtin_language_packs());
         assert_eq!(i18n.locale(), "zh-CN");
         assert_eq!(i18n.t("label_status"), "状态");
-        assert_eq!(i18n.t("label_insight"), "解析");
-        assert_eq!(
-            i18n.t("insight_empty"),
-            "选中一项并按 i，让 Agent 解析其作用与引用关系。"
-        );
+        assert_eq!(i18n.t("label_preview"), "预览");
     }
 
     #[test]

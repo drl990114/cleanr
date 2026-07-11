@@ -43,10 +43,15 @@ An item is preselected only when all of the following are true:
 - the rule confidence is `High`;
 - the rule declares `default_selected = true`;
 - the rule comes from Cleanr itself or an explicitly trusted plugin.
+- its observed modification age satisfies the shared
+  `[recommendations].preselect_after_days` policy (90 days by default, or no
+  age gate when set to `0`);
+- its scan evidence is complete and not future-dated.
 
 Everything can still be deselected before cleanup. General downloads, logs,
 temporary files, medium-confidence items, and untrusted plugin matches require
-manual selection.
+manual selection. The TUI, `cleanr analyze`, `cleanr plan`, and `cleanr dry-run`
+apply the same recommendation policy.
 
 ## Manifests and history
 
@@ -75,14 +80,19 @@ External tools that alter trash metadata can also make matching impossible.
 If Cleanr cannot restore an item, inspect the system trash and the manifest
 before taking further action.
 
-## Confirmation and agents
+## Confirmation and external local automation
 
-Cleanup requires a local user authorization token in the execution layer.
-Model-generated actions cannot create that token.
+Cleanup remains a local Cleanr review and confirmation workflow. The only
+external-agent integration contract is `cleanr analyze`; Cleanr exposes no
+external-agent cleanup endpoint or CLI through that contract.
+
+`cleanr analyze` is read-only: it scans and prints evidence, but it does not
+create a cleanup plan or move files. A recommendation from an external agent
+does not change Cleanr's cleanup flow.
 
 Setting `cleanup.require_confirm = false` removes the interactive confirmation
-dialog for a direct local `/clean` request, but it does not grant an agent
-permission to execute cleanup.
+dialog for a direct local `/clean` request; it does not turn `analyze` into an
+execution interface.
 
 ## Practical safety checklist
 

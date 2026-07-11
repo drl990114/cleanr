@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use cleanr_config::Config;
 use cleanr_core::{Confidence, EntryKind, RuleHit, RuleTrust, RulesetVersion, ScanEntry};
 use cleanr_plugin_api::{
@@ -298,13 +298,24 @@ impl RuleRegistry {
     }
 
     pub fn annotate_entries(&self, entries: &mut [ScanEntry]) {
+        self.annotate_entries_at(entries, Utc::now());
+    }
+
+    /// Annotate a scan with one fixed reference time for all age-based rules.
+    pub fn annotate_entries_at(&self, entries: &mut [ScanEntry], as_of: DateTime<Utc>) {
         for entry in entries {
-            entry.rule_hits = self.hits_for(entry);
+            entry.rule_hits = self.hits_for_at(entry, as_of);
         }
     }
 
     #[must_use]
     pub fn hits_for(&self, entry: &ScanEntry) -> Vec<RuleHit> {
+        self.hits_for_at(entry, Utc::now())
+    }
+
+    /// Return matching rules using a caller-provided reference time.
+    #[must_use]
+    pub fn hits_for_at(&self, entry: &ScanEntry, as_of: DateTime<Utc>) -> Vec<RuleHit> {
         let mut candidates = Vec::with_capacity(self.generic_rules.len() + 4);
         candidates.extend(self.generic_rules.iter().copied());
         let file_name = entry.path.file_name().map(|name| name.to_string_lossy());
@@ -356,6 +367,7 @@ impl RuleRegistry {
                     compiled,
                     file_name.as_deref(),
                     normalized_path.as_deref(),
+                    as_of,
                 )
                 .then(|| RuleHit {
                     rule_pack_id: pack.definition.id.clone(),
@@ -557,6 +569,7 @@ fn matches_rule(
     compiled: &CompiledRule,
     file_name: Option<&str>,
     normalized_path: Option<&str>,
+    as_of: DateTime<Utc>,
 ) -> bool {
     let matcher = &rule.matcher;
     if let Some(kind) = matcher.kind
@@ -592,7 +605,7 @@ fn matches_rule(
         let Some(modified_at) = entry.modified_at else {
             return false;
         };
-        if modified_at > Utc::now() - Duration::days(max_age_days) {
+        if modified_at > as_of - Duration::days(max_age_days) {
             return false;
         }
     }
@@ -755,6 +768,59 @@ mod tests {
                     rule_hits: vec![],
                 })
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn age_matchers_use_one_caller_provided_reference_time() {
+        let raw = r#"
+        id = "age-test"
+        name = "Age Test"
+        version = "1.0.0"
+        description = "Age matcher"
+        categories = ["cache"]
+
+        [[rules]]
+        id = "old-cache"
+        label = "Old Cache"
+        category = "cache"
+        match = { dir_name = "cache", max_age_days = 90 }
+        confidence = "high"
+        default_selected = true
+        action = "trash"
+        reason = "old cache"
+        risk_note = "rebuild"
+        "#;
+        let mut registry = RuleRegistry::empty();
+        registry
+            .add_pack(
+                RulePack::from_toml(raw).expect("rule pack"),
+                PluginSource::Builtin,
+                TrustLevel::Builtin,
+                None,
+            )
+            .expect("add pack");
+
+        let as_of = Utc::now();
+        let entry = ScanEntry {
+            path: PathBuf::from("/repo/cache"),
+            kind: EntryKind::Directory,
+            size_bytes: 1,
+            modified_at: Some(as_of - Duration::days(90)),
+            rule_hits: vec![],
+        };
+
+        assert_eq!(registry.hits_for_at(&entry, as_of).len(), 1);
+        assert!(
+            registry
+                .hits_for_at(&entry, as_of - Duration::days(1))
+                .is_empty()
+        );
+        assert_eq!(
+            registry
+                .hits_for_at(&entry, as_of + Duration::days(1))
+                .len(),
+            1
         );
     }
 

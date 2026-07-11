@@ -113,10 +113,6 @@ pub fn execute_cleanup_plan(
     if authorization.is_none() {
         anyhow::bail!("cleanup requires local user authorization");
     }
-    if plan.safety.agent_can_execute {
-        anyhow::bail!("invalid cleanup plan: agents must not be granted execution authority");
-    }
-
     let repository = ManifestRepository::new(state_dir);
     let selected_items = plan
         .items
@@ -1090,7 +1086,7 @@ mod tests {
         let fake = FakeTrashExecutor::default();
 
         let error = execute_cleanup_plan(&plan, &fake, temp.path(), None)
-            .expect_err("agent-style execution must be denied");
+            .expect_err("cleanup without local authorization must be denied");
         assert!(error.to_string().contains("user authorization"));
         assert!(fake.trashed_paths().is_empty());
     }
@@ -1106,27 +1102,6 @@ mod tests {
         assert_eq!(restored.summary.succeeded, 1);
         assert_eq!(fake.restored_paths(), vec![source]);
         assert_eq!(list_restore_manifests(temp.path()).expect("list").len(), 1);
-    }
-
-    #[test]
-    fn cleanup_rejects_plans_that_grant_agent_execution_authority() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let target = temp.path().join("target");
-        fs::create_dir(&target).expect("target");
-        let mut plan = build_cleanup_plan(
-            vec![temp.path().to_path_buf()],
-            vec![],
-            &[cleanup_entry(target, EntryKind::Directory, 0)],
-        );
-        plan.safety.agent_can_execute = true;
-        let fake = FakeTrashExecutor::default();
-        let authorization = CleanupAuthorization::explicit_user_confirmation();
-
-        let error = execute_cleanup_plan(&plan, &fake, temp.path(), Some(&authorization))
-            .expect_err("agent authority must fail");
-
-        assert!(error.to_string().contains("agents must not"));
-        assert!(fake.trashed_paths().is_empty());
     }
 
     #[test]

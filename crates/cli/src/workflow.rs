@@ -1,8 +1,12 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use cleanr_config::{Config, default_config_path, default_state_dir};
-use cleanr_core::{CleanupPlan, SafetyPolicy, ScanRequest, build_cleanup_plan_with_policy};
+use cleanr_core::{
+    AnalysisReport, CleanupPlan, RecommendationPolicy, SafetyPolicy, ScanRequest, UserSelection,
+    build_analysis_report_with_safety_policy, build_cleanup_plan_from_analysis,
+};
 use cleanr_fs::{ScanOptions, ScanReport, resolve_scan_roots, scan_paths};
 use cleanr_rules::RuleRegistry;
 use cleanr_tasks::{
@@ -15,6 +19,12 @@ pub struct ScanCommand {
     pub config_path: Option<PathBuf>,
     pub request: ScanRequest,
     pub json: bool,
+}
+
+/// A read-only local analysis request intended for scripts and external local agents.
+pub struct AnalyzeCommand {
+    pub config_path: Option<PathBuf>,
+    pub request: ScanRequest,
 }
 
 pub struct PlanCommand {
@@ -62,15 +72,24 @@ pub fn scan(command: ScanCommand) -> Result<()> {
     Ok(())
 }
 
+/// Print a versioned evidence report. This command never creates a cleanup plan or mutates files.
+pub fn analyze(command: AnalyzeCommand) -> Result<()> {
+    let scan = run_scan(command.config_path, command.request)?;
+    let safety = safety_policy(&scan.config, scan.config_path.clone());
+    let report = build_analysis_report(&scan, recommendation_policy(&scan.config)?, &safety)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
 pub fn plan(command: PlanCommand) -> Result<()> {
     let scan = run_scan(command.config_path, command.request)?;
-    let plan = build_plan(&scan);
+    let plan = build_plan(&scan)?;
     write_or_print_plan(&plan, command.output)
 }
 
 pub fn dry_run(command: DryRunCommand) -> Result<()> {
     let scan = run_scan(command.config_path, command.request)?;
-    let plan = build_plan(&scan);
+    let plan = build_plan(&scan)?;
     if let Some(path) = command.output {
         write_cleanup_plan(&plan, &path)?;
         println!("Dry run wrote {}", path.display());
@@ -142,7 +161,7 @@ fn run_scan(config_path: Option<PathBuf>, request: ScanRequest) -> Result<Workfl
         ignore_patterns: config.scan.ignore_patterns.clone(),
     };
     let mut report = scan_paths(&roots, &options)?;
-    registry.annotate_entries(&mut report.entries);
+    registry.annotate_entries_at(&mut report.entries, report.as_of);
     let roots = report.summary.roots.clone();
     Ok(WorkflowScan {
         config,
@@ -153,13 +172,40 @@ fn run_scan(config_path: Option<PathBuf>, request: ScanRequest) -> Result<Workfl
     })
 }
 
-fn build_plan(scan: &WorkflowScan) -> CleanupPlan {
-    build_cleanup_plan_with_policy(
+fn build_analysis_report(
+    scan: &WorkflowScan,
+    policy: RecommendationPolicy,
+    safety: &SafetyPolicy,
+) -> Result<AnalysisReport> {
+    Ok(build_analysis_report_with_safety_policy(
+        scan.report.as_of,
+        Utc::now(),
+        scan.roots.clone(),
+        &scan.report.entries,
+        &scan.report.issues,
+        policy,
+        safety,
+    )?)
+}
+
+fn build_plan(scan: &WorkflowScan) -> Result<CleanupPlan> {
+    let safety = safety_policy(&scan.config, scan.config_path.clone());
+    let analysis = build_analysis_report(scan, recommendation_policy(&scan.config)?, &safety)?;
+    let selection = UserSelection::from_recommendations(&analysis);
+    Ok(build_cleanup_plan_from_analysis(
         scan.roots.clone(),
         scan.registry.versions(),
         &scan.report.entries,
-        &safety_policy(&scan.config, scan.config_path.clone()),
-    )
+        &analysis,
+        &selection,
+        &safety,
+    ))
+}
+
+fn recommendation_policy(config: &Config) -> Result<RecommendationPolicy> {
+    Ok(RecommendationPolicy::new(
+        config.recommendations.preselect_after_days,
+    )?)
 }
 
 fn write_or_print_plan(plan: &CleanupPlan, output: Option<PathBuf>) -> Result<()> {
@@ -173,6 +219,14 @@ fn write_or_print_plan(plan: &CleanupPlan, output: Option<PathBuf>) -> Result<()
 }
 
 fn print_scan_json(report: &ScanReport) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&scan_json_value(report))?
+    );
+    Ok(())
+}
+
+fn scan_json_value(report: &ScanReport) -> serde_json::Value {
     let errors = report
         .errors
         .iter()
@@ -183,13 +237,14 @@ fn print_scan_json(report: &ScanReport) -> Result<()> {
             })
         })
         .collect::<Vec<_>>();
-    let value = json!({
+    json!({
+        "as_of": &report.as_of,
+        "completeness": report.completeness(),
         "summary": report.summary,
         "entries": report.entries,
+        "issues": &report.issues,
         "errors": errors,
-    });
-    println!("{}", serde_json::to_string_pretty(&value)?);
-    Ok(())
+    })
 }
 
 fn load_config(path: Option<PathBuf>) -> Result<Config> {
@@ -225,5 +280,58 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} {}", bytes, UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cleanr_core::{ScanIssue, ScanIssueCode};
+    use cleanr_fs::ScanError;
+
+    #[test]
+    fn scan_json_separates_structured_issues_from_local_diagnostics() {
+        let report = ScanReport {
+            issues: vec![ScanIssue {
+                code: ScanIssueCode::MetadataUnavailable,
+                path: Some(PathBuf::from("scope")),
+            }],
+            errors: vec![ScanError {
+                path: Some(PathBuf::from("scope")),
+                message: "local diagnostic text".to_string(),
+            }],
+            ..ScanReport::default()
+        };
+
+        let value = scan_json_value(&report);
+
+        assert_eq!(value["completeness"], "partial");
+        assert_eq!(
+            value["issues"],
+            json!([{
+                "code": "metadata-unavailable",
+                "path": "scope",
+            }])
+        );
+        assert_eq!(
+            value["errors"],
+            json!([{
+                "path": "scope",
+                "message": "local diagnostic text",
+            }])
+        );
+        assert!(value["issues"][0].get("message").is_none());
+
+        let pathless_report = ScanReport {
+            issues: vec![ScanIssue {
+                code: ScanIssueCode::Unknown,
+                path: None,
+            }],
+            ..ScanReport::default()
+        };
+        let pathless_value = scan_json_value(&pathless_report);
+        let pathless_issue = &pathless_value["issues"][0];
+        assert_eq!(pathless_issue["code"], "unknown");
+        assert!(pathless_issue.get("path").is_none());
     }
 }

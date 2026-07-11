@@ -12,16 +12,16 @@ description: 作为贡献者构建、测试、检查和维护 Cleanr 文档。
 
 ## 构建 workspace
 
-构建默认的本地 Provider 版本：
+构建 workspace：
 
 ```bash
 cargo build
 ```
 
-构建包含 OpenAI 和 Ollama 可选 Provider 的发布版本：
+构建发布二进制：
 
 ```bash
-cargo build --release --all-features
+cargo build --release
 ```
 
 CLI 二进制位于 `target/release/cleanr`。

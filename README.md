@@ -1,6 +1,6 @@
 # Cleanr
 
-TUI-first, reviewable disk cleanup for rebuildable caches and system cleanup locations.
+Evidence-first, reviewable disk cleanup for rebuildable caches and system cleanup locations.
 
 [English](readme/en/README.md) | [Simplified Chinese](readme/zh-CN/README.md) | [Documentation](docs/) | [Contributing](CONTRIBUTING.md)
 
@@ -17,6 +17,8 @@ and moves selected items to the operating system trash.
   temporary files.
 - Reviewable cleanup plans with size, confidence, reason, and risk notes for
   every candidate.
+- A local-only `cleanr analyze` JSON contract so a user's local coding agent
+  can inspect deterministic evidence without receiving cleanup authority.
 - Conservative default selection: only high-confidence items from built-in or
   trusted rules can be preselected.
 - Safer execution through trash-based cleanup, final pre-clean validation,
@@ -65,6 +67,21 @@ known system cleanup locations and `/restore` to restore a previous cleanup run
 when the platform supports it.
 
 Press `?` in the TUI for keyboard help.
+
+For a local coding agent, use the read-only analysis command and keep its JSON
+on the machine unless you deliberately redact it first:
+
+```bash
+cleanr analyze ~/projects > cleanr-analysis.json
+```
+
+The report is evidence for review, not a cleanup instruction. Cleanr does not
+offer an agent execution command; a person still reviews and confirms cleanup
+inside the TUI.
+
+The TUI, `analyze`, `plan`, and `dry-run` share
+`[recommendations].preselect_after_days` from `cleanr.toml` (90 days by
+default; `0` disables the age gate).
 
 ## Safety Model
 

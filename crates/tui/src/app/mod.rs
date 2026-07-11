@@ -4,18 +4,16 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver},
     },
 };
 
-use anyhow::Result;
-use cleanr_agent::{
-    ActionRequest, AgentProvider, CleanupIntent, PathContext, PathInsight, create_agent,
-    parse_slash_command,
-};
+use chrono::{DateTime, Utc};
 use cleanr_config::{Config, default_config_path, default_state_dir};
 use cleanr_core::{
-    CleanupPlan, SafetyPolicy, ScanEntry, ScanRequest, ScanSummary, build_cleanup_plan_with_policy,
+    AnalysisReport, CleanupPlan, RecommendationPolicy, RecommendationPolicyError, SafetyPolicy,
+    ScanEntry, ScanIssue, ScanRequest, ScanSummary, UserSelection,
+    build_analysis_report_with_safety_policy, build_cleanup_plan_from_analysis,
 };
 use cleanr_fs::{
     NO_GLOBAL_SCAN_ROOTS, SCAN_CANCELLED, ScanOptions, ScanPhase, ScanProgress, resolve_scan_roots,
@@ -28,10 +26,13 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
 
 use crate::{
-    commands::{command_name_for_status, filtered_palette_commands, palette_command_invocation},
+    commands::{
+        ActionRequest, CleanupIntent, command_name_for_status, filtered_palette_commands,
+        palette_command_invocation, parse_slash_command,
+    },
     effects::{
-        InsightEvent, TaskEvent, execute_cleanup, export_cleanup_plan, insight_channel,
-        load_history, restore_cleanup, save_config, spawn_insight, spawn_scan,
+        TaskEvent, execute_cleanup, export_cleanup_plan, load_history, restore_cleanup,
+        save_config, spawn_scan,
     },
     theme::Theme,
     views::{format_bytes, usage_entries},
@@ -64,28 +65,12 @@ pub(crate) enum View {
     Restore,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) enum InsightState {
-    #[default]
-    Empty,
-    Loading,
-    Ready(PathInsight),
-    Error(String),
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct InsightPanel {
-    pub(crate) target: Option<PathBuf>,
-    pub(crate) state: InsightState,
-}
-
 pub struct Workbench {
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) config: Config,
     pub(crate) registry: RuleRegistry,
     pub(crate) i18n: I18n,
     pub(crate) theme: Theme,
-    pub(crate) agent: Box<dyn AgentProvider + Send>,
     pub(crate) state_dir: PathBuf,
     pub(crate) input: String,
     pub(crate) mode: Mode,
@@ -95,14 +80,17 @@ pub struct Workbench {
     pub(crate) status: String,
     pub(crate) entries: Vec<ScanEntry>,
     pub(crate) scan_summary: ScanSummary,
+    pub(crate) scan_as_of: DateTime<Utc>,
+    pub(crate) scan_issues: Vec<ScanIssue>,
+    /// One immutable report per completed scan. Candidate IDs remain stable while the user edits
+    /// selection and rebuilds a plan.
+    pub(crate) analysis: Option<AnalysisReport>,
+    pub(crate) selection: UserSelection,
     pub(crate) plan: Option<CleanupPlan>,
     pub(crate) task_log: Vec<String>,
     pub(crate) execution_manifests: Vec<cleanr_core::ExecutionManifest>,
     pub(crate) restore_manifests: Vec<cleanr_core::RestoreManifest>,
     pub(crate) scan_rx: Option<Receiver<TaskEvent>>,
-    pub(crate) insight_rx: Option<Receiver<InsightEvent>>,
-    pub(crate) insight_tx: Sender<InsightEvent>,
-    pub(crate) insight: InsightPanel,
     pub(crate) scan_cancel: Option<Arc<AtomicBool>>,
     pub(crate) scan_progress: Option<ScanProgress>,
     pub(crate) review_after_scan: bool,

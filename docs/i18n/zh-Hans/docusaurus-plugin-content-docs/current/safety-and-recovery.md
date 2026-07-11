@@ -41,9 +41,13 @@ Cleanr 会排除：
 - 规则置信度为 `High`；
 - 规则声明 `default_selected = true`；
 - 规则来自 Cleanr 内置包或显式信任的插件。
+- 观测到的修改时间年龄满足共享的 `[recommendations].preselect_after_days` 策略
+  （默认 90 天，设为 `0` 时关闭年龄门槛）；
+- 扫描证据完整，且时间不在未来。
 
 执行前仍然可以取消任何选择。下载文件、日志、临时文件、中等置信度条目和
-未信任插件的匹配都需要手动选择。
+未信任插件的匹配都需要手动选择。TUI、`cleanr analyze`、`cleanr plan` 和
+`cleanr dry-run` 应用相同的推荐策略。
 
 ## 清单与历史
 
@@ -69,12 +73,16 @@ Cleanr 会保存：
 
 如果恢复失败，请先检查系统回收站和对应清单，再决定下一步。
 
-## 确认与 Agent 权限
+## 确认与外部本地自动化
 
-执行层要求本地用户授权令牌。模型生成的操作不能创建这个令牌。
+清理仍是 Cleanr 内部的本地审阅和确认流程。唯一面向外部 Agent 的集成契约是
+`cleanr analyze`；Cleanr 不会通过这个契约暴露外部 Agent 清理端点或 CLI。
+
+`cleanr analyze` 是只读操作：它扫描并输出证据，但不会创建清理计划或移动文件。
+外部 Agent 的建议不会改变 Cleanr 的清理流程。
 
 设置 `cleanup.require_confirm = false` 只会取消本地 `/clean` 的交互确认框，
-不会授予 Agent 执行清理的权限。
+不会把 `analyze` 变成执行接口。
 
 ## 实用安全清单
 

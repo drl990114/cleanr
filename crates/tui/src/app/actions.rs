@@ -1,7 +1,7 @@
 use super::*;
 
 impl Workbench {
-    pub fn dispatch(&mut self, action: ActionRequest) {
+    pub(crate) fn dispatch(&mut self, action: ActionRequest) {
         match action {
             ActionRequest::Scan(request) => self.start_scan(request),
             ActionRequest::Review => self.review(),
@@ -22,7 +22,11 @@ impl Workbench {
         }
     }
 
-    pub fn clean_with_executor(&mut self, intent: CleanupIntent, executor: &impl CleanupExecutor) {
+    pub(crate) fn clean_with_executor(
+        &mut self,
+        intent: CleanupIntent,
+        executor: &impl CleanupExecutor,
+    ) {
         if self.plan.is_none() {
             self.build_plan();
         }
@@ -33,11 +37,9 @@ impl Workbench {
             self.status = self.i18n.t("status_no_selected_items");
             return;
         }
-        let user_authorized = intent != CleanupIntent::AgentRequest;
         let confirmed = intent == CleanupIntent::ExplicitUserConfirmation
             || (intent == CleanupIntent::UserRequest && !plan.safety.requires_confirmation);
-        let needs_confirmation =
-            plan.safety.requires_confirmation || intent == CleanupIntent::AgentRequest;
+        let needs_confirmation = plan.safety.requires_confirmation;
         if needs_confirmation && !confirmed {
             self.clean_waiting_for_confirmation = true;
             self.restore_waiting_for_confirmation = None;
@@ -52,7 +54,7 @@ impl Workbench {
             return;
         }
 
-        match execute_cleanup(plan, executor, &self.state_dir, user_authorized) {
+        match execute_cleanup(plan, executor, &self.state_dir, true) {
             Ok(manifest) => {
                 self.clean_waiting_for_confirmation = false;
                 self.status = self.i18n.format(
@@ -175,6 +177,29 @@ impl Workbench {
         self.build_plan_for_view(true);
     }
 
+    /// Create exactly one evidence report for a completed scan. Its candidate IDs stay stable
+    /// while the user toggles items and rebuilds the cleanup plan.
+    pub(crate) fn ensure_analysis_report(
+        &mut self,
+    ) -> std::result::Result<(), RecommendationPolicyError> {
+        if self.analysis.is_some() {
+            return Ok(());
+        }
+        let safety = self.safety_policy();
+        let analysis = build_analysis_report_with_safety_policy(
+            self.scan_as_of,
+            Utc::now(),
+            self.roots.clone(),
+            &self.entries,
+            &self.scan_issues,
+            RecommendationPolicy::new(self.config.recommendations.preselect_after_days)?,
+            &safety,
+        )?;
+        self.selection = UserSelection::from_recommendations(&analysis);
+        self.analysis = Some(analysis);
+        Ok(())
+    }
+
     pub(crate) fn build_plan_for_view(&mut self, activate_scan: bool) {
         if self.entries.is_empty() {
             self.status = self.i18n.t("status_no_scan_results");
@@ -183,11 +208,20 @@ impl Workbench {
         if activate_scan {
             self.view = View::Scan;
         }
+        if let Err(error) = self.ensure_analysis_report() {
+            self.status = error.to_string();
+            return;
+        }
         let policy = self.safety_policy();
-        self.plan = Some(build_cleanup_plan_with_policy(
+        let Some(analysis) = &self.analysis else {
+            return;
+        };
+        self.plan = Some(build_cleanup_plan_from_analysis(
             self.roots.clone(),
             self.registry.versions(),
             &self.entries,
+            analysis,
+            &self.selection,
             &policy,
         ));
         if let Some(plan) = &self.plan {

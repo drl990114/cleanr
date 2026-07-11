@@ -12,16 +12,16 @@ description: Build, test, lint, and document Cleanr as a contributor.
 
 ## Build the workspace
 
-Build the default local-provider configuration:
+Build the workspace:
 
 ```bash
 cargo build
 ```
 
-Build the release binary with optional OpenAI and Ollama providers:
+Build the release binary:
 
 ```bash
-cargo build --release --all-features
+cargo build --release
 ```
 
 The CLI binary is `target/release/cleanr`.

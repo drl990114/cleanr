@@ -18,5 +18,9 @@
   "sidebar.tutorialSidebar.category.Project": {
     "message": "项目",
     "description": "The label for category 'Project' in sidebar 'tutorialSidebar'"
+  },
+  "sidebar.tutorialSidebar.doc.Evidence & privacy": {
+    "message": "证据与隐私",
+    "description": "The label for the Evidence & privacy document in sidebar 'tutorialSidebar'"
   }
 }

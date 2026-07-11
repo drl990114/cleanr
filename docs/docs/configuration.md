@@ -1,6 +1,6 @@
 ---
 sidebar_position: 5
-description: Configure Cleanr scan roots, ignores, cleanup confirmation, agents, plugins, language, and theme.
+description: Configure Cleanr scan roots, ignores, cleanup confirmation, plugins, language, and theme.
 ---
 
 # Configuration
@@ -48,11 +48,8 @@ default_action = "trash"
 require_confirm = true
 enabled_rule_packs = ["builtin-dev", "builtin-general", "builtin-system"]
 
-[agent]
-provider = "local"
-api_key_env = "CLEANR_API_KEY"
-# endpoint = "https://example.invalid/v1"
-# model = "your-model"
+[recommendations]
+preselect_after_days = 90
 
 [plugins]
 # dirs defaults to the platform config directory under cleanr/plugins
@@ -77,6 +74,7 @@ cleanr config get ui.theme
 cleanr config set ui.theme dark
 cleanr config set scan.stay_on_filesystem true
 cleanr config set cleanup.require_confirm false
+cleanr config set recommendations.preselect_after_days 180
 cleanr config set i18n.locale zh-CN
 ```
 
@@ -115,28 +113,26 @@ ignore_patterns = ["**/.git/**", "**/vendor/**", "**/.venv/**"]
 Disabling confirmation changes the dialog only. The execution layer still
 requires a local user action; see [Safety and recovery](./safety-and-recovery).
 
-### `[agent]`
+### `[recommendations]`
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `provider` | `"local"` | `"local"`, `"openai"`, or `"ollama"` |
-| `endpoint` | unset | Optional endpoint override |
-| `model` | unset | Model name for a remote provider |
-| `api_key_env` | `"CLEANR_API_KEY"` | Name of the environment variable containing the API key |
+| `preselect_after_days` | `90` | Observed modification-age threshold for deterministic preselection; `0` disables the age gate and values from `1` through `3650` are accepted |
 
-Configure several agent fields at once:
+This is one shared policy: the TUI, `cleanr analyze`, `cleanr plan`, and
+`cleanr dry-run` all use it. The age is based on observed modification metadata,
+not proven last access. Missing, future, partial, or incomplete evidence still
+blocks automatic preselection.
 
-```bash
-cleanr config set-agent \
-  --provider openai \
-  --model your-model \
-  --api-key-env OPENAI_API_KEY
-```
+## External local AI tools
 
-Store the secret in the named environment variable, not in the TOML file.
-OpenAI and Ollama require a binary built with the corresponding optional
-feature. Official release binaries include both; a default `cargo install`
-build includes only the local provider.
+Cleanr has no embedded model, provider, endpoint, or API-key configuration.
+An external agent running on the same machine can consume the read-only
+`cleanr analyze` JSON contract, but it receives no cleanup capability. The
+report includes the configured recommendation-policy snapshot and real local
+paths, so it is not a safe remote-sharing format.
+See [Evidence and privacy](./evidence-and-privacy) before giving it to another
+tool.
 
 ### `[plugins]`
 

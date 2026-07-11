@@ -11,6 +11,17 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod evidence;
+
+pub use evidence::{
+    ANALYSIS_REPORT_SCHEMA_VERSION, ActivityEvidence, ActivitySource, ActivityStatus, AnalysisId,
+    AnalysisReport, CandidateCoverage, CandidateEvidence, CandidateId, DecisionCode,
+    MAX_RECOMMENDATION_AGE_DAYS, OverlapEvidence, RecommendationDecision, RecommendationPolicy,
+    RecommendationPolicyError, RecommendationState, ReportIntegrity, RuleEvidence, RuleKey,
+    RuleResolution, RuleResolutionState, ScanEvidence, ScanIssue, ScanIssueCode, UserSelection,
+    build_analysis_report, build_analysis_report_with_safety_policy,
+};
+
 pub const CLEANUP_PLAN_SCHEMA_VERSION: &str = "cleanr.cleanup-plan.v1";
 pub const EXECUTION_SCHEMA_VERSION: &str = "cleanr.execution.v1";
 pub const RESTORE_SCHEMA_VERSION: &str = "cleanr.restore.v1";
@@ -209,7 +220,6 @@ pub struct PlanSummary {
 pub struct PlanSafety {
     pub default_action: PlannedAction,
     pub requires_confirmation: bool,
-    pub agent_can_execute: bool,
     pub rollback_method: String,
     #[serde(default)]
     pub protected_paths: Vec<PathBuf>,
@@ -222,7 +232,6 @@ impl Default for PlanSafety {
         Self {
             default_action: PlannedAction::Trash,
             requires_confirmation: true,
-            agent_can_execute: false,
             rollback_method: "system-trash+manifest".to_string(),
             protected_paths: Vec::new(),
             protected_subtrees: Vec::new(),
@@ -441,7 +450,93 @@ pub fn build_cleanup_plan_with_policy(
         })
         .collect::<Vec<_>>();
 
-    let mut items = remove_overlapping_items(items);
+    finish_cleanup_plan(
+        scan_roots,
+        ruleset_versions,
+        remove_overlapping_items(items),
+        policy,
+    )
+}
+
+/// Build a cleanup plan from a single immutable analysis report and its user-owned selection.
+///
+/// This is the product-facing plan builder: recommendation and overlap decisions come only from
+/// `analysis`, while `selection` records the user's later choices. The local safety policy is
+/// applied again defensively even though safety-aware analysis already records excluded paths.
+#[must_use]
+pub fn build_cleanup_plan_from_analysis(
+    scan_roots: Vec<PathBuf>,
+    ruleset_versions: Vec<RulesetVersion>,
+    entries: &[ScanEntry],
+    analysis: &AnalysisReport,
+    selection: &UserSelection,
+    policy: &SafetyPolicy,
+) -> CleanupPlan {
+    let normalized_scan_roots = normalize_protected_paths(scan_roots.clone());
+    let tree_fingerprints = tree_fingerprints(entries);
+    let items = analysis
+        .candidates
+        .iter()
+        .filter_map(|candidate| {
+            if matches!(
+                candidate.recommendation.state,
+                RecommendationState::Suppressed | RecommendationState::Excluded
+            ) {
+                return None;
+            }
+            let normalized_path = candidate
+                .local_path
+                .canonicalize()
+                .unwrap_or_else(|_| candidate.local_path.clone());
+            if normalized_scan_roots
+                .iter()
+                .any(|root| root == &normalized_path)
+                || !policy.allows_candidate(&candidate.local_path)
+            {
+                return None;
+            }
+            let rule = candidate
+                .rules
+                .primary
+                .as_ref()
+                .and_then(|key| candidate.rules.matched.iter().find(|rule| &rule.key == key))
+                // Unresolved conflicts remain visible for an explicitly confirmed user choice;
+                // use their stable first rule only for plan display fields, never selection.
+                .or_else(|| candidate.rules.matched.first())?;
+            let modified_at = entries
+                .iter()
+                .find(|entry| entry.path == candidate.local_path)
+                .and_then(|entry| entry.modified_at);
+            Some(CleanupItem {
+                path: candidate.local_path.clone(),
+                kind: candidate.kind,
+                size_bytes: candidate.size_bytes,
+                modified_at,
+                tree_fingerprint: (candidate.kind == EntryKind::Directory)
+                    .then(|| tree_fingerprints.get(&candidate.local_path).cloned())
+                    .flatten(),
+                rule_id: format!("{}:{}", rule.key.rule_pack_id, rule.key.rule_id),
+                category: rule.category.clone(),
+                confidence: rule.confidence,
+                reason: rule.reason.clone(),
+                risk_note: rule.risk_note.clone(),
+                selected: selection.candidate_ids.contains(&candidate.id),
+                planned_action: PlannedAction::Trash,
+                rollback_method: candidate.rollback_method.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    finish_cleanup_plan(scan_roots, ruleset_versions, items, policy)
+}
+
+fn finish_cleanup_plan(
+    scan_roots: Vec<PathBuf>,
+    ruleset_versions: Vec<RulesetVersion>,
+    items: Vec<CleanupItem>,
+    policy: &SafetyPolicy,
+) -> CleanupPlan {
+    let mut items = items;
     items.sort_by(|a, b| {
         b.selected
             .cmp(&a.selected)
@@ -589,6 +684,10 @@ fn best_hit(entry: &ScanEntry) -> Option<&RuleHit> {
             .cmp(&b.trust)
             .then_with(|| a.default_selected.cmp(&b.default_selected))
             .then_with(|| a.confidence.cmp(&b.confidence))
+            // `max_by` would otherwise retain an input-order tie. Reverse the
+            // final comparisons so the lexicographically smallest stable key wins.
+            .then_with(|| b.rule_pack_id.cmp(&a.rule_pack_id))
+            .then_with(|| b.rule_id.cmp(&a.rule_id))
     })
 }
 
@@ -654,7 +753,168 @@ mod tests {
         assert_eq!(plan.summary.candidate_count, 2);
         assert_eq!(plan.summary.selected_count, 1);
         assert!(plan.items.iter().any(|item| item.selected));
-        assert!(!plan.safety.agent_can_execute);
+    }
+
+    #[test]
+    fn analysis_plan_uses_the_same_ninety_day_preselection_boundary() {
+        let as_of = Utc::now();
+        let hit = RuleHit {
+            rule_pack_id: "builtin-dev".into(),
+            rule_id: "cache".into(),
+            label: "Cache".into(),
+            category: "developer-cache".into(),
+            confidence: Confidence::High,
+            reason: "rebuildable".into(),
+            risk_note: "rebuild".into(),
+            default_selected: true,
+            trust: RuleTrust::Builtin,
+        };
+        let entries = [89_i64, 90, 91, 1]
+            .into_iter()
+            .map(|days| ScanEntry {
+                path: PathBuf::from(format!("/repo/cache-{days}")),
+                kind: EntryKind::Directory,
+                size_bytes: 1,
+                modified_at: Some(as_of - chrono::Duration::days(days)),
+                rule_hits: vec![hit.clone()],
+            })
+            .collect::<Vec<_>>();
+        let safety = SafetyPolicy::default();
+        let analysis = build_analysis_report_with_safety_policy(
+            as_of,
+            as_of,
+            vec![PathBuf::from("/repo")],
+            &entries,
+            &[],
+            RecommendationPolicy::default(),
+            &safety,
+        )
+        .expect("default policy is valid");
+        let selection = UserSelection::from_recommendations(&analysis);
+        let plan = build_cleanup_plan_from_analysis(
+            vec![PathBuf::from("/repo")],
+            vec![],
+            &entries,
+            &analysis,
+            &selection,
+            &safety,
+        );
+
+        let is_selected = |path: &str| {
+            plan.items
+                .iter()
+                .find(|item| item.path == Path::new(path))
+                .expect("candidate appears in plan")
+                .selected
+        };
+        assert!(!is_selected("/repo/cache-89"));
+        assert!(is_selected("/repo/cache-90"));
+        assert!(is_selected("/repo/cache-91"));
+        assert!(!is_selected("/repo/cache-1"));
+    }
+
+    #[test]
+    fn analysis_plan_does_not_let_a_safety_excluded_parent_hide_a_safe_child() {
+        let as_of = Utc::now();
+        let hit = RuleHit {
+            rule_pack_id: "builtin-dev".into(),
+            rule_id: "cache".into(),
+            label: "Cache".into(),
+            category: "developer-cache".into(),
+            confidence: Confidence::High,
+            reason: "rebuildable".into(),
+            risk_note: "rebuild".into(),
+            default_selected: true,
+            trust: RuleTrust::Builtin,
+        };
+        let entries = vec![
+            ScanEntry {
+                path: PathBuf::from("/repo/cache"),
+                kind: EntryKind::Directory,
+                size_bytes: 10,
+                modified_at: Some(as_of - chrono::Duration::days(100)),
+                rule_hits: vec![hit.clone()],
+            },
+            ScanEntry {
+                path: PathBuf::from("/repo/cache/child"),
+                kind: EntryKind::Directory,
+                size_bytes: 5,
+                modified_at: Some(as_of - chrono::Duration::days(100)),
+                rule_hits: vec![hit],
+            },
+        ];
+        let safety = SafetyPolicy::new(vec![PathBuf::from("/repo/cache/protected")], true);
+        let analysis = build_analysis_report_with_safety_policy(
+            as_of,
+            as_of,
+            vec![PathBuf::from("/repo")],
+            &entries,
+            &[],
+            RecommendationPolicy::default(),
+            &safety,
+        )
+        .expect("default policy is valid");
+        let parent = analysis
+            .candidates
+            .iter()
+            .find(|candidate| candidate.local_path == Path::new("/repo/cache"))
+            .expect("parent candidate");
+        let child = analysis
+            .candidates
+            .iter()
+            .find(|candidate| candidate.local_path == Path::new("/repo/cache/child"))
+            .expect("child candidate");
+        assert_eq!(parent.recommendation.state, RecommendationState::Excluded);
+        assert_ne!(child.recommendation.state, RecommendationState::Suppressed);
+
+        let selection = UserSelection::from_recommendations(&analysis);
+        let plan = build_cleanup_plan_from_analysis(
+            vec![PathBuf::from("/repo")],
+            vec![],
+            &entries,
+            &analysis,
+            &selection,
+            &safety,
+        );
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].path, PathBuf::from("/repo/cache/child"));
+        assert!(plan.items[0].selected);
+    }
+
+    #[test]
+    fn plan_rule_ties_use_a_stable_rule_key_not_input_order() {
+        let hit = |rule_id: &str| RuleHit {
+            rule_pack_id: "builtin-dev".to_string(),
+            rule_id: rule_id.to_string(),
+            label: rule_id.to_string(),
+            category: "developer-cache".to_string(),
+            confidence: Confidence::High,
+            reason: rule_id.to_string(),
+            risk_note: "rebuild".to_string(),
+            default_selected: true,
+            trust: RuleTrust::Builtin,
+        };
+        let make_entry = |rule_hits| ScanEntry {
+            path: PathBuf::from("/repo/cache"),
+            kind: EntryKind::Directory,
+            size_bytes: 1,
+            modified_at: None,
+            rule_hits,
+        };
+
+        let forward = build_cleanup_plan(
+            vec![PathBuf::from("/repo")],
+            vec![],
+            &[make_entry(vec![hit("z-rule"), hit("a-rule")])],
+        );
+        let reverse = build_cleanup_plan(
+            vec![PathBuf::from("/repo")],
+            vec![],
+            &[make_entry(vec![hit("a-rule"), hit("z-rule")])],
+        );
+
+        assert_eq!(forward.items[0].rule_id, "builtin-dev:a-rule");
+        assert_eq!(forward.items[0].rule_id, reverse.items[0].rule_id);
     }
 
     #[test]

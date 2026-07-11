@@ -56,7 +56,8 @@ optimizer, registry cleaner, or unattended deletion service.
 
 - [Quick start](./quick-start): install Cleanr and complete a first cleanup.
 - [Using Cleanr](./using-cleanr): learn the workflow, shortcuts, and commands.
-- [Configuration](./configuration): change scan, cleanup, language, theme, and
-  agent settings.
+- [Evidence and privacy](./evidence-and-privacy): use the local, read-only
+  analysis contract safely with another local agent.
+- [Configuration](./configuration): change scan, cleanup, language, and theme.
 - [Troubleshooting](./troubleshooting): resolve common startup, scan, and
   restore problems.

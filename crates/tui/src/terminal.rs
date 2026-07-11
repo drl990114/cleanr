@@ -34,7 +34,7 @@ pub struct UpdateNotice {
 pub fn run(options: TuiOptions) -> Result<()> {
     let (registry, i18n) = load_runtime(&options.config)?;
     let theme = resolve_theme(options.config.ui.theme);
-    let mut app = Workbench::new(options.roots, options.config, registry, i18n, theme)?;
+    let mut app = Workbench::new(options.roots, options.config, registry, i18n, theme);
     if let Some(update) = options.update_available {
         app.status = app.i18n.format(
             "status_update_available",

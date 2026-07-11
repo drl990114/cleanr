@@ -13,7 +13,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{ConfirmChoice, InsightState, Mode, View, Workbench},
+    app::{ConfirmChoice, Mode, View, Workbench},
     theme::Theme,
 };
 

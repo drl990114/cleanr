@@ -28,10 +28,6 @@ Requires Rust 1.94 or later:
 cargo install cleanr-cli
 ```
 
-This build includes the local command interpreter. Remote OpenAI and Ollama
-providers are optional features; they are included in official release
-binaries.
-
 ### Prebuilt binary
 
 Download the binary for your platform from
@@ -44,7 +40,7 @@ Linux, make the downloaded file executable and place it somewhere on your
 ```bash
 git clone https://github.com/drl990114/cleanr.git
 cd cleanr
-cargo build --release --all-features
+cargo build --release
 ```
 
 The binary is written to `target/release/cleanr`.
@@ -104,6 +100,23 @@ To narrow the global scan, add one or more categories:
 ```text
 /scan --global-kind browser-caches --global-kind logs
 ```
+
+## Give a local AI tool read-only evidence
+
+Use `analyze` when another local agent should inspect Cleanr's deterministic
+facts rather than drive the TUI:
+
+```bash
+cleanr analyze ~/projects > cleanr-analysis.json
+```
+
+The command only scans and prints a versioned JSON report. It does not create a
+cleanup plan or move files. The output contains real local paths, so keep it on
+your machine unless you have independently removed sensitive details. See
+[Evidence and privacy](./evidence-and-privacy) for the contract and boundary.
+It shares the TUI, `plan`, and `dry-run` recommendation policy. Change the
+default 90-day age gate in `[recommendations].preselect_after_days` in the
+configuration file when needed.
 
 ## Use Simplified Chinese
 

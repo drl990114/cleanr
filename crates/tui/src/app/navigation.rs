@@ -155,31 +155,37 @@ impl Workbench {
         if self.plan.is_none() && !self.entries.is_empty() {
             self.build_plan();
         }
-        let Some(plan) = &mut self.plan else {
-            self.status = self.i18n.t("status_no_scan_results");
-            return;
+        let (path, selected) = {
+            let Some(plan) = &mut self.plan else {
+                self.status = self.i18n.t("status_no_scan_results");
+                return;
+            };
+            let idx = self.list_state.selected().unwrap_or(0);
+            let Some(item) = plan.items.get_mut(idx) else {
+                return;
+            };
+            item.selected = !item.selected;
+            if item.selected {
+                plan.summary.selected_count += 1;
+                plan.summary.selected_size_bytes += item.size_bytes;
+            } else {
+                plan.summary.selected_count -= 1;
+                plan.summary.selected_size_bytes -= item.size_bytes;
+            }
+            (item.path.clone(), item.selected)
         };
-        let idx = self.list_state.selected().unwrap_or(0);
-        let Some(item) = plan.items.get_mut(idx) else {
-            return;
-        };
-        item.selected = !item.selected;
-        if item.selected {
-            plan.summary.selected_count += 1;
-            plan.summary.selected_size_bytes += item.size_bytes;
-        } else {
-            plan.summary.selected_count -= 1;
-            plan.summary.selected_size_bytes -= item.size_bytes;
-        }
-        let state = if item.selected {
+        self.set_analysis_selection_for_path(&path, selected);
+        let state = if selected {
             self.i18n.t("state_selected")
         } else {
             self.i18n.t("state_deselected")
         };
-        let path = item.path.display().to_string();
         self.status = self.i18n.format(
             "status_item_toggled",
-            &[("path", path), ("state", state.to_string())],
+            &[
+                ("path", path.display().to_string()),
+                ("state", state.to_string()),
+            ],
         );
     }
 
@@ -191,26 +197,51 @@ impl Workbench {
         if self.plan.is_none() && !self.entries.is_empty() {
             self.build_plan();
         }
-        let Some(plan) = &mut self.plan else {
-            self.status = self.i18n.t("status_no_scan_results");
-            return;
-        };
-        let all_selected = plan.items.iter().all(|item| item.selected);
-        let target = !all_selected;
-        plan.summary.selected_count = 0;
-        plan.summary.selected_size_bytes = 0;
-        for item in &mut plan.items {
-            item.selected = target;
-            if target {
-                plan.summary.selected_count += 1;
-                plan.summary.selected_size_bytes += item.size_bytes;
+        let (target, paths) = {
+            let Some(plan) = &mut self.plan else {
+                self.status = self.i18n.t("status_no_scan_results");
+                return;
+            };
+            let target = !plan.items.iter().all(|item| item.selected);
+            plan.summary.selected_count = 0;
+            plan.summary.selected_size_bytes = 0;
+            let mut paths = Vec::with_capacity(plan.items.len());
+            for item in &mut plan.items {
+                item.selected = target;
+                if target {
+                    plan.summary.selected_count += 1;
+                    plan.summary.selected_size_bytes += item.size_bytes;
+                }
+                paths.push(item.path.clone());
             }
+            (target, paths)
+        };
+        for path in paths {
+            self.set_analysis_selection_for_path(&path, target);
         }
         self.status = if target {
             self.i18n.t("status_all_toggled_selected")
         } else {
             self.i18n.t("status_all_toggled_deselected")
         };
+    }
+
+    fn set_analysis_selection_for_path(&mut self, path: &std::path::Path, selected: bool) {
+        let candidate_id = self.analysis.as_ref().and_then(|analysis| {
+            analysis
+                .candidates
+                .iter()
+                .find(|candidate| candidate.local_path == path)
+                .map(|candidate| candidate.id.clone())
+        });
+        let Some(candidate_id) = candidate_id else {
+            return;
+        };
+        if selected {
+            self.selection.select(candidate_id);
+        } else {
+            self.selection.deselect(&candidate_id);
+        }
     }
 
     pub(crate) fn switch_language(&mut self) {
@@ -241,7 +272,7 @@ impl Workbench {
     // Command palette
     // ------------------------------------------------------------------
 
-    pub(crate) fn filtered_palette_commands(&self) -> Vec<cleanr_agent::CommandInfo> {
+    pub(crate) fn filtered_palette_commands(&self) -> Vec<crate::commands::CommandInfo> {
         self.filtered_palette_commands_for(&self.input)
     }
 
@@ -252,7 +283,7 @@ impl Workbench {
     pub(crate) fn filtered_palette_commands_for(
         &self,
         input: &str,
-    ) -> Vec<cleanr_agent::CommandInfo> {
+    ) -> Vec<crate::commands::CommandInfo> {
         filtered_palette_commands(self.has_scan_results(), input, &self.i18n)
     }
 

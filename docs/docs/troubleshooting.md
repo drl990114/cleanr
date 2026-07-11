@@ -1,6 +1,6 @@
 ---
 sidebar_position: 8
-description: Fix common Cleanr installation, terminal, scan, configuration, provider, and restore problems.
+description: Fix common Cleanr installation, terminal, scan, configuration, and restore problems.
 ---
 
 # Troubleshooting
@@ -72,19 +72,6 @@ cleanr --config /tmp/cleanr-default.toml config init
 
 - Resize very small terminal windows.
 - If Cleanr is interrupted, run `reset` in the shell to restore terminal state.
-
-## OpenAI or Ollama is reported as unsupported
-
-The binary was built without that optional provider. Official release binaries
-include both. For a source build, use:
-
-```bash
-cargo build --release --all-features
-```
-
-Then configure the provider, model, endpoint if needed, and the environment
-variable that contains the API key. Never put the API key itself in
-`api_key_env`.
 
 ## Cleanup skips an item that was selected
 

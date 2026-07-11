@@ -52,6 +52,10 @@ High-confidence items from built-in or trusted rules can be preselected.
 Medium- and low-confidence items, and all matches from untrusted plugins, start
 unselected.
 
+The same `[recommendations].preselect_after_days` policy is used in the TUI,
+`cleanr analyze`, `cleanr plan`, and `cleanr dry-run`. It defaults to 90 days;
+set it to `0` to disable the age gate.
+
 Useful keys while reviewing:
 
 | Key | Action |
@@ -60,7 +64,6 @@ Useful keys while reviewing:
 | `gg` / `G` | Jump to the first / last item |
 | `space` or `Enter` | Select or deselect the current item |
 | `a` or `%` | Select or deselect all items |
-| `i` | Explain the selected path |
 | `c` | Continue to cleanup confirmation |
 | `h` or `Esc` | Return home |
 | `?` | Open keyboard help |
@@ -103,14 +106,19 @@ Use these commands from scripts or terminals when you do not need the TUI:
 
 ```bash
 cleanr scan --json /path/to/project
+cleanr analyze /path/to/project
 cleanr plan --output cleanr-plan.json /path/to/project
 cleanr dry-run --json /path/to/project
 cleanr restore list
 cleanr restore run <run-id> --confirm
 ```
 
-`dry-run` and `plan` only generate a cleanup plan. They do not move files.
-Restore still requires `--confirm`.
+`analyze` always prints a versioned, local `AnalysisReport` JSON document. It
+does not create a cleanup plan or move files. Its output contains real local
+paths, so use it only with a local agent unless you independently redact the
+data. It shares `[recommendations].preselect_after_days` with the TUI, `plan`,
+and `dry-run`. `dry-run` and `plan` only generate a cleanup plan. Restore still
+requires `--confirm`.
 
 ## Slash commands
 

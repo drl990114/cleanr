@@ -105,10 +105,6 @@ impl Workbench {
                 self.review();
                 self.clear_pending();
             }
-            KeyCode::Char('i') | KeyCode::Char('I') => {
-                self.explain_selected_item();
-                self.clear_pending();
-            }
             KeyCode::Char('s') | KeyCode::Char('S') => {
                 self.start_scan(ScanRequest::default());
                 self.clear_pending();
@@ -285,25 +281,7 @@ impl Workbench {
         }
 
         self.palette_state.select(None);
-        match self.agent.interpret(&input) {
-            Ok(response) => {
-                self.status = if response
-                    .actions
-                    .iter()
-                    .any(|action| matches!(action, ActionRequest::Scan(_)))
-                {
-                    self.i18n.t("status_plain_language_scan_review")
-                } else {
-                    self.i18n.t("status_plain_language_help")
-                };
-                for action in response.actions {
-                    self.dispatch(action);
-                }
-            }
-            Err(err) => {
-                self.status = err.to_string();
-            }
-        }
+        self.status = self.i18n.t("status_help");
     }
 
     pub(crate) fn submit_slash_input(&mut self, input: &str) {

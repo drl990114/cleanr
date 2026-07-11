@@ -18,8 +18,9 @@ The project already includes:
 - cancellable single-pass scanning, glob ignores, and known-cache discovery;
 - execution-time path, type, file size, directory fingerprint,
   modification, and protected-path checks;
-- a local authorization boundary that model-generated actions cannot bypass;
-- non-interactive scan JSON, plan export, dry-run, and restore commands;
+- a local authorization boundary that external tools cannot bypass;
+- a versioned, read-only local analysis report for external local agents,
+  alongside scan JSON, plan export, dry-run, and restore commands;
 - versioned, declarative plugin bundles with compatibility and trust metadata.
 
 ## Near-term: clearer control and recovery
@@ -36,7 +37,9 @@ The project intends to deepen developer-specific guidance:
 
 - broader cache coverage for package managers, build tools, IDEs, mobile
   toolchains, and containers;
-- scoring that considers safety, reclaimable space, last use, and rebuild cost;
+- scoring that considers safety, reclaimable space, observed modification
+  recency, and rebuild cost; it must not present modification time as proven
+  last use;
 - conservative, balanced, and maximum-space presets;
 - explanations of how each cache is recreated and whether network access is
   required;
@@ -44,8 +47,11 @@ The project intends to deepen developer-specific guidance:
 
 ## Automation
 
-Potential automation surfaces include executing explicitly reviewed plans,
-scheduled diagnostics, and richer machine-readable failure reports.
+Potential automation surfaces include scheduled diagnostics and richer
+machine-readable failure reports. Any execution surface must remain tied to an
+explicit, locally reviewed user action.
 
-AI remains an explanation and rule-authoring layer. It should not grant itself
-cleanup permission or turn a suggestion into an unattended destructive action.
+AI is an external consumer of local evidence and a possible rule-authoring
+assistant. Cleanr will not embed a model or provider, grant an AI cleanup
+permission, or turn a suggestion into unattended destructive action. Remote
+sharing, if ever considered, requires a separately designed redacted contract.

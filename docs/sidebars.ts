@@ -23,7 +23,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Project',
-      items: ['architecture', 'development', 'roadmap'],
+      items: ['architecture', 'evidence-and-privacy', 'development', 'roadmap'],
     },
   ],
 };

@@ -11,10 +11,9 @@ description: 面向贡献者的 Cleanr crate、数据流和安全边界说明。
 
 | Crate | 路径 | 职责 |
 | --- | --- | --- |
-| `cleanr-core` | `crates/core` | 扫描条目、规则命中、清理计划、安全策略和清单模型 |
-| `cleanr-cli` | `crates/cli` | 命令行入口、参数解析、配置命令和插件管理 |
+| `cleanr-core` | `crates/core` | 扫描条目、规则命中、证据报告、清理计划、安全策略和清单模型 |
+| `cleanr-cli` | `crates/cli` | 命令行入口、参数解析、只读分析、配置命令和插件管理 |
 | `cleanr-tui` | `crates/tui` | 终端应用、状态机、页面和后台任务编排 |
-| `cleanr-agent` | `crates/agent` | 斜杠命令解析、本地路径解释和可选远程 Provider |
 | `cleanr-fs` | `crates/fs` | 文件系统扫描、元数据收集、取消和 `ScanReport` 生成 |
 | `cleanr-rules` | `crates/rules` | 内置与插件规则加载、校验、匹配和 `RuleRegistry` |
 | `cleanr-plugin-api` | `crates/plugin-api` | 带版本 manifest、发现、兼容性、信任、Schema 和诊断 |
@@ -55,13 +54,24 @@ pending 清单 → cleanr-tasks 校验 → 系统回收站 → 清单更新
 `cleanr-tui` 将渲染与 I/O 分离：
 
 - `app/` 负责状态变化和用户动作；
-- `effects/` 负责后台扫描、持久化、清理、恢复和 Agent 工作；
+- `effects/` 负责后台扫描、持久化、清理和恢复工作；
 - `views/` 只根据应用状态渲染；
 - `commands/` 将动作请求映射到命令面板；
 - `terminal.rs` 负责 raw mode、输入轮询、绘制和终端恢复。
 
 页面不会遍历文件系统。后台任务将结果发送回状态机，因此取消和部分失败都能
 明确反映在 UI 中。
+
+## 外部本地 AI 边界
+
+`cleanr analyze` 是供同一台机器上的外部 Agent 使用的只读 CLI 边界。它扫描、
+应用确定性的规则和推荐策略，并输出带版本的 `AnalysisReport` JSON；不会创建
+清理计划、授予授权或移动文件。Agent 可以基于证据解释结果或提出审阅建议，
+但仍由用户在 Cleanr 中选择并确认清理。
+
+报告包含原始本地路径、扫描根目录、规则元数据和解释性文本，以及诊断信息。它刻意
+是本地契约，而非远程传输对象；未来若需要远程分享，必须另行设计脱敏 DTO 和威胁
+模型。
 
 ## 安全边界
 
@@ -71,7 +81,8 @@ pending 清单 → cleanr-tasks 校验 → 系统回收站 → 清单更新
 - `cleanr-core` 在生成计划时排除受保护和重叠候选项，并为选中目录记录指纹；
 - `cleanr-tasks` 要求本地授权，在移动文件前写入 journal，并在执行时重新校验每个目标；
 - 回收站后端在平台支持时记录回滚信息；
-- Agent 可以提出动作，但不能创建清理授权。
+- `cleanr analyze` 只读，不能创建清理授权或调用清理；
+- 这个接口不会把扫描证据交给内置模型或 Provider。
 
 插件默认保持声明式。manifest、规则和翻译只会作为数据解析；动态 hook 是单独
 受信任的外部命令能力。

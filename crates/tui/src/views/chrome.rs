@@ -80,9 +80,6 @@ pub(crate) fn render_status(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
                 if app.list_len() > 0 {
                     hints.extend(key_hint("j/k", app.i18n.t("hint_move"), app.theme));
                     hints.extend(key_hint("space", app.i18n.t("hint_select"), app.theme));
-                    if app.plan.is_some() && area.width >= 88 {
-                        hints.extend(key_hint("i", app.i18n.t("hint_inspect"), app.theme));
-                    }
                     if app.plan.is_some() && area.width >= 104 {
                         hints.extend(key_hint("a", app.i18n.t("hint_all"), app.theme));
                     }
@@ -251,7 +248,6 @@ pub(crate) fn render_help(frame: &mut Frame<'_>, area: Rect, app: &Workbench) {
         Line::from(app.i18n.t("help_select_all")),
         Line::from(app.i18n.t("help_toggle")),
         Line::from(app.i18n.t("help_actions")),
-        Line::from(app.i18n.t("help_inspect")),
         Line::from(app.i18n.t("help_command")),
         Line::from(app.i18n.t("help_palette")),
         Line::from(app.i18n.t("help_page")),

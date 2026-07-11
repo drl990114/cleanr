@@ -13,9 +13,14 @@ impl Workbench {
                     }
                     Ok(TaskEvent::ScanFinished(Ok(mut report))) => {
                         self.scan_cancel = None;
-                        self.registry.annotate_entries(&mut report.entries);
+                        self.registry
+                            .annotate_entries_at(&mut report.entries, report.as_of);
+                        self.scan_as_of = report.as_of;
+                        self.scan_issues = report.issues;
                         self.scan_summary = report.summary;
                         self.entries = report.entries;
+                        self.analysis = None;
+                        self.selection = UserSelection::default();
                         self.plan = None;
                         self.scan_progress = None;
                         self.task_log.push(self.i18n.format(
@@ -80,24 +85,6 @@ impl Workbench {
                 }
             }
         }
-
-        if let Some(rx) = self.insight_rx.take() {
-            loop {
-                match rx.try_recv() {
-                    Ok(InsightEvent::Finished(Ok(insight))) => {
-                        self.insight.state = InsightState::Ready(insight);
-                    }
-                    Ok(InsightEvent::Finished(Err(err))) => {
-                        self.insight.state = InsightState::Error(err);
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        self.insight_rx = Some(rx);
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => break,
-                }
-            }
-        }
     }
 
     pub(crate) fn start_scan(&mut self, request: ScanRequest) {
@@ -154,6 +141,10 @@ impl Workbench {
         });
         self.entries.clear();
         self.scan_summary = ScanSummary::default();
+        self.scan_as_of = Utc::now();
+        self.scan_issues.clear();
+        self.analysis = None;
+        self.selection = UserSelection::default();
         self.plan = None;
         self.view = view;
         self.list_state.select(None);
@@ -210,38 +201,6 @@ impl Workbench {
             ScanPhase::Aggregating => "scan_phase_aggregating",
         };
         self.i18n.t(key)
-    }
-
-    pub(crate) fn explain_selected_item(&mut self) {
-        let Some(plan) = &self.plan else {
-            self.status = self.i18n.t("status_select_scan_only");
-            return;
-        };
-        let Some(idx) = self.list_state.selected() else {
-            return;
-        };
-        let Some(item) = plan.items.get(idx) else {
-            return;
-        };
-
-        self.insight.target = Some(item.path.clone());
-        self.insight.state = InsightState::Loading;
-
-        let path = item.path.clone();
-        let context = PathContext {
-            size_bytes: item.size_bytes,
-            parent_path: item.path.parent().map(PathBuf::from),
-            rule_id: Some(item.rule_id.clone()),
-            reason: Some(item.reason.clone()),
-        };
-        if let Err(error) = spawn_insight(
-            self.config.agent.clone(),
-            path,
-            context,
-            self.insight_tx.clone(),
-        ) {
-            self.insight.state = InsightState::Error(error.to_string());
-        }
     }
 
     pub(crate) fn refresh_history(&mut self) {

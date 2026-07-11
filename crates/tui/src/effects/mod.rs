@@ -3,13 +3,12 @@ use std::{
     sync::{
         Arc,
         atomic::AtomicBool,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver},
     },
 };
 
 use anyhow::{Context, Result};
-use cleanr_agent::{PathContext, PathInsight, create_agent};
-use cleanr_config::{AgentConfig, Config};
+use cleanr_config::Config;
 use cleanr_core::{CleanupPlan, ExecutionManifest, RestoreManifest};
 use cleanr_fs::{ScanOptions, ScanProgress, ScanReport, scan_paths_with_progress_cancellable};
 use cleanr_i18n::I18n;
@@ -23,10 +22,6 @@ use cleanr_tasks::{
 pub(crate) enum TaskEvent {
     ScanProgress(ScanProgress),
     ScanFinished(std::result::Result<ScanReport, String>),
-}
-
-pub(crate) enum InsightEvent {
-    Finished(std::result::Result<PathInsight, String>),
 }
 
 pub(crate) struct ScanEffect {
@@ -44,10 +39,6 @@ pub(crate) fn load_runtime(config: &Config) -> Result<(RuleRegistry, I18n)> {
         RuleRegistry::load_with_discovery(config, &discovery)?,
         I18n::load_with_discovery(config, &discovery)?,
     ))
-}
-
-pub(crate) fn insight_channel() -> (Sender<InsightEvent>, Receiver<InsightEvent>) {
-    mpsc::channel()
 }
 
 pub(crate) fn spawn_scan(roots: Vec<PathBuf>, options: ScanOptions) -> Result<ScanEffect> {
@@ -73,24 +64,6 @@ pub(crate) fn spawn_scan(roots: Vec<PathBuf>, options: ScanOptions) -> Result<Sc
         receiver,
         cancellation,
     })
-}
-
-pub(crate) fn spawn_insight(
-    config: AgentConfig,
-    path: PathBuf,
-    context: PathContext,
-    sender: Sender<InsightEvent>,
-) -> Result<()> {
-    std::thread::Builder::new()
-        .name("cleanr-insight".to_string())
-        .spawn(move || {
-            let result = create_agent(&config)
-                .and_then(|agent| agent.explain_path(&path, &context))
-                .map_err(|error| error.to_string());
-            let _ = sender.send(InsightEvent::Finished(result));
-        })
-        .context("failed to spawn insight worker")?;
-    Ok(())
 }
 
 pub(crate) fn load_history(

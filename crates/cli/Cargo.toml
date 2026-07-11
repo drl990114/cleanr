@@ -12,13 +12,9 @@ rust-version.workspace = true
 name = "cleanr"
 path = "src/main.rs"
 
-[features]
-default = []
-openai = ["cleanr-tui/openai"]
-ollama = ["cleanr-tui/ollama"]
-
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 cleanr-config = { version = "0.9.0", path = "../config" }
 cleanr-core = { version = "0.9.0", path = "../core" }

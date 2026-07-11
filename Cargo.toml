@@ -4,7 +4,6 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/tui",
-    "crates/agent",
     "crates/fs",
     "crates/rules",
     "crates/plugin-api",
@@ -25,10 +24,6 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 anyhow = "1.0"
-async-openai = { version = "0.41", default-features = false, features = ["chat-completion", "rustls"] }
-ollama-rs = { version = "0.3.5", default-features = false, features = ["rustls"] }
-tokio = { version = "1", features = ["rt"] }
-url = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 crossterm = "0.29"

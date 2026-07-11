@@ -9,7 +9,10 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use cleanr_core::{EntryKind, GlobalScanKind, ScanEntry, ScanRequest, ScanSummary};
+use cleanr_core::{
+    EntryKind, GlobalScanKind, ReportIntegrity, ScanEntry, ScanIssue, ScanIssueCode, ScanRequest,
+    ScanSummary,
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use walkdir::WalkDir;
 
@@ -60,11 +63,38 @@ pub struct ResolvedScanRoots {
     pub global_roots: Vec<GlobalScanRoot>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ScanReport {
+    /// The single reference time for facts derived during this scan.
+    pub as_of: DateTime<Utc>,
     pub summary: ScanSummary,
     pub entries: Vec<ScanEntry>,
+    /// Structured scan coverage facts, intentionally without local error text.
+    pub issues: Vec<ScanIssue>,
     pub errors: Vec<ScanError>,
+}
+
+impl Default for ScanReport {
+    fn default() -> Self {
+        Self {
+            as_of: Utc::now(),
+            summary: ScanSummary::default(),
+            entries: Vec::new(),
+            issues: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl ScanReport {
+    /// Returns whether every requested scope was scanned without an unexpected failure.
+    ///
+    /// Intentional exclusions, such as configured ignores and filesystem-boundary skips, are
+    /// recorded in [`Self::issues`] but do not make the report partial.
+    #[must_use]
+    pub fn completeness(&self) -> ReportIntegrity {
+        ReportIntegrity::from_issues(&self.issues)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +235,7 @@ fn scan_paths_impl(
     cancelled: Option<&AtomicBool>,
     on_progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport> {
+    let as_of = Utc::now();
     let roots = normalize_roots(if paths.is_empty() {
         vec![std::env::current_dir()?]
     } else {
@@ -213,11 +244,14 @@ fn scan_paths_impl(
     let ignore = IgnoreMatcher::new(options)?;
 
     let mut report = ScanReport {
+        as_of,
         summary: ScanSummary {
             roots: roots.clone(),
             ..ScanSummary::default()
         },
-        ..ScanReport::default()
+        entries: Vec::new(),
+        issues: Vec::new(),
+        errors: Vec::new(),
     };
 
     let mut hardlinks = HardlinkTracker::default();
@@ -280,38 +314,56 @@ fn scan_root(
         let entry = match next {
             Ok(entry) => entry,
             Err(err) => {
+                let path = err.path().map(Path::to_path_buf);
                 report.errors.push(ScanError {
-                    path: err.path().map(Path::to_path_buf),
+                    path: path.clone(),
                     message: err.to_string(),
+                });
+                report.issues.push(ScanIssue {
+                    code: ScanIssueCode::TraversalError,
+                    path,
                 });
                 continue;
             }
         };
 
         let path = entry.path().to_path_buf();
+        let is_directory = entry.file_type().is_dir();
+        if ignore.matches(&path, root) {
+            report.issues.push(ScanIssue {
+                code: ScanIssueCode::IgnoredByConfig,
+                path: Some(path),
+            });
+            if is_directory {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+
         let metadata = match entry.path().symlink_metadata() {
             Ok(metadata) => metadata,
             Err(err) => {
                 report.errors.push(ScanError {
-                    path: Some(path),
+                    path: Some(path.clone()),
                     message: err.to_string(),
+                });
+                report.issues.push(ScanIssue {
+                    code: ScanIssueCode::MetadataUnavailable,
+                    path: Some(path),
                 });
                 continue;
             }
         };
 
-        if entry.file_type().is_dir() {
-            if ignore.matches(&path, root) {
-                walker.skip_current_dir();
-                continue;
-            }
-            if let Some(root_device) = root_device
-                && device_id(&metadata).is_some_and(|device| device != root_device)
-            {
-                walker.skip_current_dir();
-                continue;
-            }
-        } else if ignore.matches(&path, root) {
+        if is_directory
+            && let Some(root_device) = root_device
+            && device_id(&metadata).is_some_and(|device| device != root_device)
+        {
+            report.issues.push(ScanIssue {
+                code: ScanIssueCode::CrossFilesystemSkipped,
+                path: Some(path),
+            });
+            walker.skip_current_dir();
             continue;
         }
 
@@ -876,6 +928,20 @@ mod tests {
     }
 
     #[test]
+    fn scan_captures_a_single_reference_time_at_start() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("entry"), b"content").expect("write");
+        let before = Utc::now();
+
+        let report =
+            scan_paths(&[temp.path().to_path_buf()], &ScanOptions::default()).expect("scan");
+
+        let after = Utc::now();
+        assert!(report.as_of >= before);
+        assert!(report.as_of <= after);
+    }
+
+    #[test]
     fn progress_scans_each_entry_once_and_finishes_with_total() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::create_dir(temp.path().join("cache")).expect("mkdir");
@@ -934,6 +1000,50 @@ mod tests {
                 .iter()
                 .any(|entry| entry.path.ends_with("visible"))
         );
+        assert_eq!(report.completeness(), ReportIntegrity::Complete);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == ScanIssueCode::IgnoredByConfig
+                && issue
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with(".git"))
+        }));
+    }
+
+    #[test]
+    fn unavailable_root_records_a_traversal_issue_and_partial_report() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let unavailable = temp.path().join("does-not-exist");
+
+        let report = scan_paths(std::slice::from_ref(&unavailable), &ScanOptions::default())
+            .expect("scan report");
+
+        assert_eq!(report.completeness(), ReportIntegrity::Partial);
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == ScanIssueCode::TraversalError
+                && issue.path.as_deref() == Some(unavailable.as_path())
+        }));
+    }
+
+    #[test]
+    fn report_completeness_delegates_to_the_fail_closed_core_policy() {
+        assert!(ScanIssueCode::TraversalError.makes_report_partial());
+        assert!(ScanIssueCode::MetadataUnavailable.makes_report_partial());
+        assert!(ScanIssueCode::PermissionDenied.makes_report_partial());
+        assert!(ScanIssueCode::RootUnavailable.makes_report_partial());
+        assert!(ScanIssueCode::Unknown.makes_report_partial());
+        assert!(!ScanIssueCode::IgnoredByConfig.makes_report_partial());
+        assert!(!ScanIssueCode::CrossFilesystemSkipped.makes_report_partial());
+
+        let report = ScanReport {
+            issues: vec![ScanIssue {
+                code: ScanIssueCode::Unknown,
+                path: None,
+            }],
+            ..ScanReport::default()
+        };
+        assert_eq!(report.completeness(), ReportIntegrity::Partial);
     }
 
     #[test]
@@ -1070,7 +1180,7 @@ mod tests {
         let report = scan_paths(
             &[temp.path().to_path_buf()],
             &ScanOptions {
-                ignore_dirs: vec![ignored],
+                ignore_dirs: vec![ignored.clone()],
                 ..ScanOptions::default()
             },
         )
@@ -1088,6 +1198,11 @@ mod tests {
                 .iter()
                 .any(|entry| entry.path.ends_with("visible"))
         );
+        assert_eq!(report.completeness(), ReportIntegrity::Complete);
+        assert!(report.issues.iter().any(|issue| {
+            issue.code == ScanIssueCode::IgnoredByConfig
+                && issue.path.as_deref() == Some(ignored.as_path())
+        }));
     }
 
     #[test]

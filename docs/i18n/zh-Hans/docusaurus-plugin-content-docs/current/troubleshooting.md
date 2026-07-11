@@ -1,6 +1,6 @@
 ---
 sidebar_position: 8
-description: 解决 Cleanr 安装、终端、扫描、配置、Provider 和恢复中的常见问题。
+description: 解决 Cleanr 安装、终端、扫描、配置和恢复中的常见问题。
 ---
 
 # 故障排查
@@ -68,17 +68,6 @@ cleanr --config /tmp/cleanr-default.toml config init
 
 - 放大过小的终端窗口。
 - 如果程序被强制中断，在 Shell 中运行 `reset` 恢复终端状态。
-
-## OpenAI 或 Ollama 显示不受支持
-
-当前二进制没有编译对应可选功能。官方发布版本包含两者。从源码构建时使用：
-
-```bash
-cargo build --release --all-features
-```
-
-然后配置 Provider、模型、必要时的端点，以及保存 API Key 的环境变量。
-`api_key_env` 中应填写环境变量名，而不是密钥本身。
 
 ## 已选条目在清理时被跳过
 

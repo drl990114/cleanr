@@ -1,14 +1,13 @@
 use super::*;
 use crate::{
     app::{ConfirmChoice, View},
-    commands::palette_command_invocation,
+    commands::{ActionRequest, CleanupIntent, palette_command_invocation},
     views::{
         bottom_bounded_rect, centered_bounded_rect, command_cursor_position, display_width,
         fluid_content_rect, ime_guard_position, render, scan_loading_bar_sample, truncate_text,
         usage_descendant_count,
     },
 };
-use cleanr_agent::{ActionRequest, CleanupIntent};
 use cleanr_config::Config;
 use cleanr_core::{
     Confidence, EXECUTION_SCHEMA_VERSION, EntryKind, ExecutionItem, ExecutionManifest,
@@ -54,7 +53,6 @@ fn app(root: PathBuf) -> Workbench {
         I18n::new("en-US", BTreeMap::new(), builtin_language_packs()),
         Theme::dark(),
     )
-    .expect("create workbench")
 }
 
 fn render_text(app: &mut Workbench, width: u16, height: u16) -> String {
@@ -129,28 +127,6 @@ fn starts_in_workbench_with_empty_command_input() {
 }
 
 #[test]
-fn agent_cannot_execute_when_confirmation_dialog_is_disabled() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let target = temp.path().join("target");
-    fs::create_dir(&target).expect("mkdir");
-    fs::write(target.join("artifact"), vec![0; 2 * 1024 * 1024]).expect("write artifact");
-    let mut app = app(temp.path().to_path_buf());
-    app.config.cleanup.require_confirm = false;
-    let report = scan_paths(&app.roots, &ScanOptions::default()).expect("scan");
-    app.entries = report.entries;
-    app.registry.annotate_entries(&mut app.entries);
-    app.build_plan();
-    let executor = FakeTrashExecutor::default();
-
-    app.clean_with_executor(CleanupIntent::AgentRequest, &executor);
-
-    assert!(executor.trashed_paths().is_empty());
-    assert!(target.exists());
-    assert!(app.clean_waiting_for_confirmation);
-    assert!(app.status().contains("Review plan"));
-}
-
-#[test]
 fn home_layout_has_one_clear_primary_action() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = app(temp.path().to_path_buf());
@@ -216,8 +192,7 @@ fn chinese_home_matches_the_primary_terminal_layout() {
         RuleRegistry::builtin().expect("builtin rules"),
         I18n::new("zh-CN", BTreeMap::new(), builtin_language_packs()),
         Theme::dark(),
-    )
-    .expect("create workbench");
+    );
 
     let screen = render_text(&mut app, 143, 41);
     let compact = screen
@@ -263,11 +238,11 @@ fn scan_layout_keeps_selection_and_details_distinct() {
     let screen = render_text(&mut app, 120, 30);
     println!("{screen}");
 
-    assert!(screen.contains("[✓]"));
+    assert!(screen.contains("[ ]"));
     assert!(screen.contains("Preview"));
     assert!(screen.contains("space select"));
     assert!(screen.contains("Current item"));
-    assert!(screen.contains("i inspect"));
+    assert!(!screen.contains("i inspect"));
 }
 
 #[test]
@@ -283,7 +258,7 @@ fn scan_layout_truncates_long_paths_without_hiding_decision_columns() {
             .join("artifact.bin"),
         kind: EntryKind::Directory,
         size_bytes: 12 * 1024 * 1024 * 1024,
-        modified_at: None,
+        modified_at: Some(app.scan_as_of - chrono::Duration::days(100)),
         rule_hits: vec![test_rule_hit("generated")],
     }];
     app.build_plan();
@@ -298,7 +273,7 @@ fn scan_layout_truncates_long_paths_without_hiding_decision_columns() {
 }
 
 #[test]
-fn chinese_scan_layout_uses_translations_for_insight_and_preview_labels() {
+fn chinese_scan_layout_uses_translations_for_preview_labels() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = Workbench::new(
         vec![temp.path().to_path_buf()],
@@ -306,8 +281,7 @@ fn chinese_scan_layout_uses_translations_for_insight_and_preview_labels() {
         RuleRegistry::builtin().expect("builtin rules"),
         I18n::new("zh-CN", BTreeMap::new(), builtin_language_packs()),
         Theme::dark(),
-    )
-    .expect("create workbench");
+    );
     app.entries = vec![ScanEntry {
         path: temp.path().join("target"),
         kind: EntryKind::Directory,
@@ -324,11 +298,9 @@ fn chinese_scan_layout_uses_translations_for_insight_and_preview_labels() {
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>();
 
-    assert!(compact.contains("解析"));
+    assert!(compact.contains("预览"));
     assert!(compact.contains("当前项"));
     assert!(compact.contains("路径"));
-    assert!(!compact.contains("label_insight"));
-    assert!(!compact.contains("insight_empty"));
 }
 
 #[test]
@@ -340,8 +312,7 @@ fn chinese_scan_progress_uses_refined_thin_rail_layout() {
         RuleRegistry::builtin().expect("builtin rules"),
         I18n::new("zh-CN", BTreeMap::new(), builtin_language_packs()),
         Theme::light(),
-    )
-    .expect("create workbench");
+    );
     app.dispatch(ActionRequest::Scan(ScanRequest::default()));
     app.scan_progress = Some(ScanProgress {
         phase: ScanPhase::Scanning,
@@ -530,7 +501,7 @@ fn scan_command_runs_in_background_and_finds_candidates() {
 
     assert!(!app.is_scan_running());
     app.dispatch(ActionRequest::Review);
-    assert_eq!(app.plan().expect("plan").summary.selected_count, 1);
+    assert_eq!(app.plan().expect("plan").summary.selected_count, 0);
 }
 
 #[test]
@@ -626,6 +597,7 @@ fn cleanup_success_starts_background_refresh_scan() {
     app.entries = report.entries;
     app.registry.annotate_entries(&mut app.entries);
     app.build_plan();
+    app.toggle_all_scan_selection();
     let executor = FakeTrashExecutor::default();
 
     app.clean_with_executor(CleanupIntent::ExplicitUserConfirmation, &executor);
@@ -867,6 +839,107 @@ fn toggling_selection_updates_summary() {
     app.handle_key(key(KeyCode::Char(' ')));
     let plan = app.plan().expect("plan");
     assert_ne!(plan.summary.selected_count, initial);
+}
+
+#[test]
+fn rebuilding_a_plan_preserves_the_user_selection_from_one_analysis_report() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    let old_cache = temp.path().join("old-cache");
+    let recent_cache = temp.path().join("recent-cache");
+    app.entries = vec![
+        ScanEntry {
+            path: old_cache.clone(),
+            kind: EntryKind::Directory,
+            size_bytes: 1024,
+            modified_at: Some(app.scan_as_of - chrono::Duration::days(100)),
+            rule_hits: vec![test_rule_hit("generated")],
+        },
+        ScanEntry {
+            path: recent_cache.clone(),
+            kind: EntryKind::Directory,
+            size_bytes: 1024,
+            modified_at: Some(app.scan_as_of - chrono::Duration::days(1)),
+            rule_hits: vec![test_rule_hit("generated")],
+        },
+    ];
+
+    app.build_plan();
+    let old_candidate_id = app
+        .analysis
+        .as_ref()
+        .expect("analysis")
+        .candidates
+        .iter()
+        .find(|candidate| candidate.local_path == old_cache)
+        .expect("old candidate")
+        .id
+        .clone();
+    let recent_candidate_id = app
+        .analysis
+        .as_ref()
+        .expect("analysis")
+        .candidates
+        .iter()
+        .find(|candidate| candidate.local_path == recent_cache)
+        .expect("recent candidate")
+        .id
+        .clone();
+    assert!(
+        app.plan()
+            .expect("plan")
+            .items
+            .iter()
+            .find(|item| item.path == old_cache)
+            .expect("old item")
+            .selected
+    );
+    assert!(
+        !app.plan()
+            .expect("plan")
+            .items
+            .iter()
+            .find(|item| item.path == recent_cache)
+            .expect("recent item")
+            .selected
+    );
+
+    app.list_state.select(Some(0));
+    app.toggle_scan_selection();
+    app.list_state.select(Some(1));
+    app.toggle_scan_selection();
+    assert!(!app.selection.candidate_ids.contains(&old_candidate_id));
+    assert!(app.selection.candidate_ids.contains(&recent_candidate_id));
+
+    app.build_plan();
+    let rebuilt = app.plan().expect("rebuilt plan");
+    assert!(
+        !rebuilt
+            .items
+            .iter()
+            .find(|item| item.path == old_cache)
+            .expect("old item")
+            .selected
+    );
+    assert!(
+        rebuilt
+            .items
+            .iter()
+            .find(|item| item.path == recent_cache)
+            .expect("recent item")
+            .selected
+    );
+    assert_eq!(
+        app.analysis
+            .as_ref()
+            .expect("analysis remains")
+            .candidates
+            .iter()
+            .find(|candidate| candidate.local_path == old_cache)
+            .expect("old candidate")
+            .id,
+        old_candidate_id
+    );
 }
 
 #[test]

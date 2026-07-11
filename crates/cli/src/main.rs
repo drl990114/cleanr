@@ -60,6 +60,21 @@ enum Command {
         json: bool,
     },
 
+    /// Analyze paths and print a read-only JSON evidence report for local tools and agents.
+    Analyze {
+        /// Scan roots. Defaults to the current directory.
+        #[arg(value_parser)]
+        paths: Vec<PathBuf>,
+
+        /// Include known system cleanup locations.
+        #[arg(long)]
+        global: bool,
+
+        /// Include one global system cleanup category. May be repeated.
+        #[arg(long = "global-kind")]
+        global_kinds: Vec<GlobalScanKind>,
+    },
+
     /// Build a cleanup plan without executing it.
     Plan {
         /// Scan roots. Defaults to the current directory.
@@ -181,25 +196,6 @@ enum ConfigAction {
 
     /// Set a configuration value by dotted key.
     Set { key: String, value: String },
-
-    /// Conveniently set one or more agent/LLM fields.
-    SetAgent {
-        /// Agent provider: local, openai, ollama.
-        #[arg(long)]
-        provider: Option<String>,
-
-        /// Model name, for example gpt-4o-mini or llama3.2.
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Provider endpoint URL.
-        #[arg(long)]
-        endpoint: Option<String>,
-
-        /// Environment variable that holds the API key.
-        #[arg(long)]
-        api_key_env: Option<String>,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -376,6 +372,14 @@ fn main() -> Result<()> {
                 request: scan_request(paths, global, global_kinds),
                 json,
             }),
+            Command::Analyze {
+                paths,
+                global,
+                global_kinds,
+            } => workflow::analyze(workflow::AnalyzeCommand {
+                config_path: args.config,
+                request: scan_request(paths, global, global_kinds),
+            }),
             Command::Plan {
                 paths,
                 global,
@@ -423,12 +427,6 @@ fn main() -> Result<()> {
                 ConfigAction::Init { force } => config_cmd::init(args.config, force),
                 ConfigAction::Get { key } => config_cmd::get(args.config, &key),
                 ConfigAction::Set { key, value } => config_cmd::set(args.config, &key, &value),
-                ConfigAction::SetAgent {
-                    provider,
-                    model,
-                    endpoint,
-                    api_key_env,
-                } => config_cmd::set_agent(args.config, provider, model, endpoint, api_key_env),
             },
             Command::Plugin { action } => match action {
                 PluginAction::Init {
@@ -678,6 +676,27 @@ mod tests {
                 if paths == vec![PathBuf::from("/repo/with spaces")]
                     && global_kinds == vec![GlobalScanKind::BrowserCaches]
         ));
+
+        let analyze = Args::try_parse_from([
+            "cleanr",
+            "analyze",
+            "--global-kind",
+            "developer-caches",
+            "/repo",
+        ])
+        .expect("parse analyze");
+        assert!(matches!(
+            analyze.command,
+            Some(Command::Analyze {
+                paths,
+                global: false,
+                global_kinds,
+            }) if paths == vec![PathBuf::from("/repo")]
+                && global_kinds == vec![GlobalScanKind::DeveloperCaches]
+        ));
+        assert!(
+            Args::try_parse_from(["cleanr", "analyze", "--preselect-after-days", "120",]).is_err()
+        );
 
         let dry_run =
             Args::try_parse_from(["cleanr", "dry-run", "--output", "/tmp/plan.json", "/repo"])

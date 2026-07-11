@@ -7,17 +7,14 @@ impl Workbench {
         registry: RuleRegistry,
         i18n: I18n,
         theme: Theme,
-    ) -> Result<Self> {
-        let agent = create_agent(&config.agent)?;
+    ) -> Self {
         let status = i18n.t("status_ready");
-        let (insight_tx, insight_rx) = insight_channel();
-        Ok(Self {
+        Self {
             roots,
             config,
             registry,
             i18n,
             theme,
-            agent,
             state_dir: default_state_dir(),
             input: String::new(),
             mode: Mode::Normal,
@@ -27,14 +24,15 @@ impl Workbench {
             status,
             entries: Vec::new(),
             scan_summary: ScanSummary::default(),
+            scan_as_of: Utc::now(),
+            scan_issues: Vec::new(),
+            analysis: None,
+            selection: UserSelection::default(),
             plan: None,
             task_log: Vec::new(),
             execution_manifests: Vec::new(),
             restore_manifests: Vec::new(),
             scan_rx: None,
-            insight_rx: Some(insight_rx),
-            insight_tx,
-            insight: InsightPanel::default(),
             scan_cancel: None,
             scan_progress: None,
             review_after_scan: false,
@@ -50,7 +48,7 @@ impl Workbench {
             viewport_height: 10,
             animation_tick: 0,
             ime_guard_phase: false,
-        })
+        }
     }
 
     #[must_use]

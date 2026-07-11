@@ -23,16 +23,16 @@ scripts/        Local maintenance and release commands
 
 ## Build
 
-Build the default local-provider configuration:
+Build the workspace:
 
 ```bash
 cargo build
 ```
 
-Build the release binary with optional OpenAI and Ollama providers:
+Build the release binary:
 
 ```bash
-cargo build --release --all-features
+cargo build --release
 ```
 
 The release binary is written to `target/release/cleanr`.
