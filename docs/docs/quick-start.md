@@ -118,6 +118,16 @@ It shares the TUI, `plan`, and `dry-run` recommendation policy. Change the
 default 90-day age gate in `[recommendations].preselect_after_days` in the
 configuration file when needed.
 
+Install the repository's cross-agent skill directly from GitHub:
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+It guides this local-only, read-only workflow and has no cleanup authority.
+Agent selection and invocation are covered in
+[Evidence and privacy](./evidence-and-privacy).
+
 ## Use Simplified Chinese
 
 Initialize the built-in Chinese language file:

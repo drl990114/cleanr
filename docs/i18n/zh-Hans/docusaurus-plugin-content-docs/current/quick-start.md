@@ -110,6 +110,15 @@ cleanr analyze ~/projects > cleanr-analysis.json
 如有需要，可在配置文件的 `[recommendations].preselect_after_days` 中修改默认的
 90 天年龄门槛。
 
+可直接从 GitHub 安装仓库中的跨 Agent Skill：
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+它只指导仅限本地的只读工作流，没有清理权限。Agent 选择和调用方式请见
+[证据与隐私](./evidence-and-privacy)。
+
 ## 使用简体中文
 
 初始化内置中文语言文件：

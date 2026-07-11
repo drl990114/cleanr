@@ -83,6 +83,17 @@ The TUI, `analyze`, `plan`, and `dry-run` share
 `[recommendations].preselect_after_days` from `cleanr.toml` (90 days by
 default; `0` disables the age gate).
 
+Install the repository's cross-agent `cleanr-review-disk-cleanup` skill directly
+from GitHub:
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+It guides local, read-only analysis and has no cleanup authority. See
+[Evidence and privacy](../../docs/docs/evidence-and-privacy.md) for
+supported-agent selection and usage.
+
 ## Safety Model
 
 Cleanr does not clean anything just because it was found. The plan remains

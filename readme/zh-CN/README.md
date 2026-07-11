@@ -66,6 +66,15 @@ TUI 中审阅并确认。
 TUI、`analyze`、`plan` 和 `dry-run` 共用 `cleanr.toml` 中的
 `[recommendations].preselect_after_days`（默认 90 天；设为 `0` 会关闭年龄门槛）。
 
+可直接从 GitHub 安装仓库中的跨 Agent Skill `cleanr-review-disk-cleanup`：
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+它只指导本地只读分析，没有清理权限。支持的 Agent 选择方式和用法请见
+[证据与隐私](../../docs/i18n/zh-Hans/docusaurus-plugin-content-docs/current/evidence-and-privacy.md)。
+
 ## 安全模型
 
 Cleanr 不会因为找到某个路径就直接清理。执行前你仍然可以编辑计划；选中路径会在清理前再次校验；清理动作会移动到系统废纸篓，而不是永久删除。

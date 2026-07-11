@@ -34,6 +34,28 @@ output. It only scans and evaluates evidence. It does **not** create a cleanup
 plan, change the current TUI selection, request cleanup authorization, or move
 files.
 
+## Install the agent skill
+
+The repository includes the cross-agent `cleanr-review-disk-cleanup` skill for
+this local, read-only workflow. Install that skill directly from GitHub with
+the open [Skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+The installer detects supported local agents and lets you select the targets.
+The `-g` flag makes the skill available to your user account across projects;
+omit it to install only in the current project. You can also target an agent
+explicitly with `-a <agent-name>`.
+
+Start a new task or session in the selected agent afterward. Invoke
+`$cleanr-review-disk-cleanup` where explicit skill invocation is supported, or
+ask the agent to review Cleanr disk-cleanup evidence. The skill is not tied to
+Codex: it uses the portable `SKILL.md` format and can be installed into any
+agent supported by Skills CLI. It only guides local read-only analysis; it has
+no cleanup authority and does not confirm, execute, or authorize cleanup.
+
 ## What the report means
 
 One report has a fixed `as_of` time so age decisions are consistent at the

@@ -29,6 +29,24 @@ preselect_after_days = 90
 命令会把带版本的 `AnalysisReport` JSON 写到标准输出。它只扫描和评估证据，**不会**
 创建清理计划、修改当前 TUI 选择、请求清理授权或移动文件。
 
+## 安装 Agent Skill
+
+仓库提供跨 Agent 的 `cleanr-review-disk-cleanup` Skill，用于引导这种本地只读工作流。
+使用开放的 [Skills CLI](https://github.com/vercel-labs/skills) 直接从 GitHub 安装：
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+安装器会检测本机支持的 Agent，并让你选择安装目标。`-g` 表示安装到用户级、供所有
+项目使用；去掉 `-g` 则只安装到当前项目。也可以使用 `-a <agent-name>` 明确指定
+Agent。
+
+安装后请在选定的 Agent 中新建任务或会话。支持显式调用 Skill 的 Agent 可使用
+`$cleanr-review-disk-cleanup`；其他 Agent 可以直接要求“审阅 Cleanr 磁盘清理证据”。
+该 Skill 使用可移植的 `SKILL.md` 格式，并不专属于 Codex，可安装到 Skills CLI 支持的
+任意 Agent。它只引导本地只读分析：没有清理权限，也不会确认、执行或授权清理。
+
 ## 报告的含义
 
 同一报告拥有固定的 `as_of` 时间，因此年龄判断在门槛边界上保持一致。报告包括：
