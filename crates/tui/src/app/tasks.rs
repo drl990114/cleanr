@@ -1,89 +1,194 @@
 use super::*;
 
 impl Workbench {
-    pub fn poll_tasks(&mut self) {
-        self.animation_tick = self.animation_tick.wrapping_add(1);
+    /// Drain worker events and report whether observable UI state changed. Progress events are
+    /// coalesced so a fast filesystem walk causes one status allocation per UI poll, not one per
+    /// channel message.
+    pub fn poll_tasks(&mut self) -> bool {
+        let operation_changed = self.poll_operation();
+        let Some(rx) = self.scan_rx.take() else {
+            return operation_changed;
+        };
 
-        if let Some(rx) = self.scan_rx.take() {
-            loop {
-                match rx.try_recv() {
-                    Ok(TaskEvent::ScanProgress(progress)) => {
-                        self.status = self.scan_progress_status(&progress);
-                        self.scan_progress = Some(progress);
-                    }
-                    Ok(TaskEvent::ScanFinished(Ok(mut report))) => {
-                        self.scan_cancel = None;
-                        self.registry
-                            .annotate_entries_at(&mut report.entries, report.as_of);
-                        self.scan_as_of = report.as_of;
-                        self.scan_issues = report.issues;
-                        self.scan_summary = report.summary;
-                        self.entries = report.entries;
-                        self.analysis = None;
-                        self.selection = UserSelection::default();
-                        self.plan = None;
-                        self.scan_progress = None;
-                        self.task_log.push(self.i18n.format(
-                            "status_scan_log",
-                            &[
-                                ("entries", self.scan_summary.entries_seen.to_string()),
-                                ("errors", self.scan_summary.errors.to_string()),
-                            ],
-                        ));
-                        self.status = self.i18n.format(
-                            "status_scan_finished",
-                            &[
-                                ("entries", self.scan_summary.entries_seen.to_string()),
-                                (
-                                    "candidates",
-                                    self.entries
-                                        .iter()
-                                        .filter(|entry| !entry.rule_hits.is_empty())
-                                        .count()
-                                        .to_string(),
-                                ),
-                            ],
-                        );
-                        let activate_scan = self.view == View::Scan || self.review_after_scan;
-                        self.review_after_scan = false;
-                        let usage_after_scan = self.usage_after_scan;
-                        self.usage_after_scan = false;
-                        if !self.entries.is_empty() {
-                            self.build_plan_for_view(activate_scan);
-                        }
-                        if usage_after_scan {
-                            self.show_usage();
-                        } else if self.view == View::Scan {
-                            self.select_first();
-                        }
-                        break;
-                    }
-                    Ok(TaskEvent::ScanFinished(Err(err))) => {
-                        self.scan_cancel = None;
-                        self.status = if err.contains(SCAN_CANCELLED) {
-                            self.i18n.t("status_scan_cancelled")
-                        } else {
-                            err
-                        };
-                        self.scan_progress = None;
-                        self.review_after_scan = false;
-                        self.usage_after_scan = false;
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        self.scan_rx = Some(rx);
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        self.scan_cancel = None;
-                        self.status = self.i18n.t("status_scan_disconnected");
-                        self.scan_progress = None;
-                        self.review_after_scan = false;
-                        self.usage_after_scan = false;
-                        break;
-                    }
+        let mut latest_progress = None;
+        let mut finished = None;
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(TaskEvent::ScanProgress(progress)) => latest_progress = Some(progress),
+                Ok(TaskEvent::ScanFinished(result)) => {
+                    finished = Some(result);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.scan_rx = Some(rx);
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
                 }
             }
+        }
+
+        if let Some(result) = finished {
+            self.finish_scan(result);
+            return true;
+        }
+        if disconnected {
+            self.scan_cancel = None;
+            self.status = self.i18n.t("status_scan_disconnected");
+            self.scan_progress = None;
+            self.review_after_scan = false;
+            self.usage_after_scan = false;
+            return true;
+        }
+        if let Some(progress) = latest_progress {
+            self.status = self.scan_progress_status(&progress);
+            self.scan_progress = Some(progress);
+            return true;
+        }
+        operation_changed
+    }
+
+    fn poll_operation(&mut self) -> bool {
+        let Some(receiver) = self.operation_rx.take() else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(event) => {
+                self.operation_kind = None;
+                self.finish_operation(event);
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.operation_rx = Some(receiver);
+                false
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.operation_kind = None;
+                self.status = self.i18n.t("status_operation_disconnected");
+                true
+            }
+        }
+    }
+
+    fn finish_operation(&mut self, event: OperationEvent) {
+        match event {
+            OperationEvent::CleanupFinished(Ok(manifest)) => {
+                self.status = self.i18n.format(
+                    "status_cleaned",
+                    &[
+                        ("succeeded", manifest.summary.succeeded.to_string()),
+                        ("failed", manifest.summary.failed.to_string()),
+                        ("run_id", manifest.run_id.clone()),
+                    ],
+                );
+                self.task_log
+                    .push(format!("clean {}", manifest.summary.succeeded));
+                if !self
+                    .execution_manifests
+                    .iter()
+                    .any(|existing| existing.run_id == manifest.run_id)
+                {
+                    self.execution_manifests.insert(0, manifest);
+                }
+                self.refresh_roots_after_mutation();
+            }
+            OperationEvent::RestoreFinished(Ok(restored)) => {
+                self.status = self.i18n.format(
+                    "status_restored",
+                    &[
+                        ("succeeded", restored.summary.succeeded.to_string()),
+                        ("failed", restored.summary.failed.to_string()),
+                        ("restore_id", restored.restore_id.clone()),
+                    ],
+                );
+                self.task_log
+                    .push(format!("restore {}", restored.summary.succeeded));
+                if !self
+                    .restore_manifests
+                    .iter()
+                    .any(|existing| existing.restore_id == restored.restore_id)
+                {
+                    self.restore_manifests.insert(0, restored);
+                }
+                self.refresh_roots_after_mutation();
+            }
+            OperationEvent::CleanupFinished(Err(error))
+            | OperationEvent::RestoreFinished(Err(error)) => self.status = error,
+        }
+    }
+
+    pub(crate) fn advance_animation(&mut self) -> bool {
+        if !self.has_background_task() {
+            return false;
+        }
+        self.animation_tick = self.animation_tick.wrapping_add(1);
+        true
+    }
+
+    fn finish_scan(&mut self, result: std::result::Result<cleanr_fs::ScanReport, String>) {
+        self.scan_cancel = None;
+        let mut report = match result {
+            Ok(report) => report,
+            Err(error) => {
+                self.status = if error.contains(SCAN_CANCELLED) {
+                    self.i18n.t("status_scan_cancelled")
+                } else {
+                    error
+                };
+                self.scan_progress = None;
+                self.review_after_scan = false;
+                self.usage_after_scan = false;
+                return;
+            }
+        };
+
+        self.registry
+            .annotate_entries_at(&mut report.entries, report.as_of);
+        self.scan_as_of = report.as_of;
+        self.scan_issues = report.issues;
+        self.scan_summary = report.summary;
+        self.entries = report.entries;
+        self.analysis = None;
+        self.candidate_ids_by_path.clear();
+        self.selection = UserSelection::default();
+        self.plan = None;
+        self.scan_progress = None;
+        self.rebuild_usage_order();
+        self.task_log.push(self.i18n.format(
+            "status_scan_log",
+            &[
+                ("entries", self.scan_summary.entries_seen.to_string()),
+                ("errors", self.scan_summary.errors.to_string()),
+            ],
+        ));
+        self.status = self.i18n.format(
+            "status_scan_finished",
+            &[
+                ("entries", self.scan_summary.entries_seen.to_string()),
+                (
+                    "candidates",
+                    self.entries
+                        .iter()
+                        .filter(|entry| !entry.rule_hits.is_empty())
+                        .count()
+                        .to_string(),
+                ),
+            ],
+        );
+        let activate_scan = self.view == View::Scan || self.review_after_scan;
+        self.review_after_scan = false;
+        let usage_after_scan = self.usage_after_scan;
+        self.usage_after_scan = false;
+        if !self.entries.is_empty() {
+            self.build_plan_for_view(activate_scan);
+        }
+        if usage_after_scan {
+            self.show_usage();
+        } else if self.view == View::Scan {
+            self.select_first();
         }
     }
 
@@ -92,6 +197,10 @@ impl Workbench {
     }
 
     pub(crate) fn start_scan_for_view(&mut self, mut request: ScanRequest, view: View) {
+        if self.is_operation_running() {
+            self.status = self.i18n.t("status_operation_running");
+            return;
+        }
         if self.scan_rx.is_some() {
             self.status = self.i18n.t("status_scan_already_running");
             return;
@@ -140,10 +249,14 @@ impl Workbench {
             current_path: self.roots.first().cloned(),
         });
         self.entries.clear();
+        self.usage_order.clear();
+        self.usage_max_size = 0;
+        self.usage_descendant_counts.clear();
         self.scan_summary = ScanSummary::default();
         self.scan_as_of = Utc::now();
         self.scan_issues.clear();
         self.analysis = None;
+        self.candidate_ids_by_path.clear();
         self.selection = UserSelection::default();
         self.plan = None;
         self.view = view;
@@ -163,6 +276,10 @@ impl Workbench {
     }
 
     pub(crate) fn start_usage_scan(&mut self, request: ScanRequest) {
+        if self.is_operation_running() {
+            self.status = self.i18n.t("status_operation_running");
+            return;
+        }
         if self.scan_rx.is_some() {
             self.status = self.i18n.t("status_scan_already_running");
             return;

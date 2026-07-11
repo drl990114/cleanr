@@ -474,6 +474,10 @@ pub fn build_cleanup_plan_from_analysis(
 ) -> CleanupPlan {
     let normalized_scan_roots = normalize_protected_paths(scan_roots.clone());
     let tree_fingerprints = tree_fingerprints(entries);
+    let entries_by_path = entries
+        .iter()
+        .map(|entry| (entry.path.as_path(), entry))
+        .collect::<HashMap<_, _>>();
     let items = analysis
         .candidates
         .iter()
@@ -503,9 +507,8 @@ pub fn build_cleanup_plan_from_analysis(
                 // Unresolved conflicts remain visible for an explicitly confirmed user choice;
                 // use their stable first rule only for plan display fields, never selection.
                 .or_else(|| candidate.rules.matched.first())?;
-            let modified_at = entries
-                .iter()
-                .find(|entry| entry.path == candidate.local_path)
+            let modified_at = entries_by_path
+                .get(candidate.local_path.as_path())
                 .and_then(|entry| entry.modified_at);
             Some(CleanupItem {
                 path: candidate.local_path.clone(),

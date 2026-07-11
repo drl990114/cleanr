@@ -22,6 +22,9 @@ crossterm.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true
 terminal-light.workspace = true
+unicode-segmentation.workspace = true
+unicode-truncate.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

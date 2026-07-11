@@ -22,9 +22,54 @@ impl Workbench {
                 .sum(),
             View::Plugins => self.registry.packs().len() + self.plugin_diagnostics().len(),
             View::Tasks => self.task_log.len(),
-            View::Usage => usage_entries(self).len(),
+            View::Usage => self.usage_order.len(),
             View::Restore => self.execution_manifests.len(),
         }
+    }
+
+    pub(crate) fn rebuild_usage_order(&mut self) {
+        let entries = &self.entries;
+        let mut order = Vec::new();
+
+        for root in &self.roots {
+            let root_path = root.as_path();
+            let mut children = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.path.parent() == Some(root_path))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            children.sort_by_key(|index| std::cmp::Reverse(entries[*index].size_bytes));
+            order.extend(children);
+        }
+
+        if order.is_empty() {
+            order.extend(0..entries.len());
+            order.sort_by_key(|index| std::cmp::Reverse(entries[*index].size_bytes));
+            order.truncate(100);
+        }
+
+        self.usage_max_size = order
+            .iter()
+            .map(|index| entries[*index].size_bytes)
+            .max()
+            .unwrap_or(0);
+        let usage_positions = order
+            .iter()
+            .enumerate()
+            .filter(|(_, entry_index)| entries[**entry_index].kind == EntryKind::Directory)
+            .map(|(position, entry_index)| (entries[*entry_index].path.as_path(), position))
+            .collect::<HashMap<_, _>>();
+        let mut descendant_counts = vec![0usize; order.len()];
+        for entry in entries {
+            for ancestor in entry.path.ancestors().skip(1) {
+                if let Some(position) = usage_positions.get(ancestor) {
+                    descendant_counts[*position] = descendant_counts[*position].saturating_add(1);
+                }
+            }
+        }
+        self.usage_order = order;
+        self.usage_descendant_counts = descendant_counts;
     }
 
     pub(crate) fn reset_list_selection(&mut self) {
@@ -197,7 +242,7 @@ impl Workbench {
         if self.plan.is_none() && !self.entries.is_empty() {
             self.build_plan();
         }
-        let (target, paths) = {
+        let target = {
             let Some(plan) = &mut self.plan else {
                 self.status = self.i18n.t("status_no_scan_results");
                 return;
@@ -205,19 +250,29 @@ impl Workbench {
             let target = !plan.items.iter().all(|item| item.selected);
             plan.summary.selected_count = 0;
             plan.summary.selected_size_bytes = 0;
-            let mut paths = Vec::with_capacity(plan.items.len());
             for item in &mut plan.items {
                 item.selected = target;
                 if target {
                     plan.summary.selected_count += 1;
                     plan.summary.selected_size_bytes += item.size_bytes;
                 }
-                paths.push(item.path.clone());
             }
-            (target, paths)
+            target
         };
-        for path in paths {
-            self.set_analysis_selection_for_path(&path, target);
+
+        let candidate_ids = self
+            .plan
+            .as_ref()
+            .into_iter()
+            .flat_map(|plan| &plan.items)
+            .filter_map(|item| self.candidate_ids_by_path.get(&item.path).cloned())
+            .collect::<Vec<_>>();
+        for candidate_id in candidate_ids {
+            if target {
+                self.selection.select(candidate_id);
+            } else {
+                self.selection.deselect(&candidate_id);
+            }
         }
         self.status = if target {
             self.i18n.t("status_all_toggled_selected")
@@ -227,14 +282,7 @@ impl Workbench {
     }
 
     fn set_analysis_selection_for_path(&mut self, path: &std::path::Path, selected: bool) {
-        let candidate_id = self.analysis.as_ref().and_then(|analysis| {
-            analysis
-                .candidates
-                .iter()
-                .find(|candidate| candidate.local_path == path)
-                .map(|candidate| candidate.id.clone())
-        });
-        let Some(candidate_id) = candidate_id else {
+        let Some(candidate_id) = self.candidate_ids_by_path.get(path).cloned() else {
             return;
         };
         if selected {
@@ -285,16 +333,6 @@ impl Workbench {
         input: &str,
     ) -> Vec<crate::commands::CommandInfo> {
         filtered_palette_commands(self.has_scan_results(), input, &self.i18n)
-    }
-
-    pub(crate) fn clamp_palette_selection(&mut self) {
-        let len = self.filtered_palette_commands().len();
-        if len == 0 {
-            self.palette_state.select(None);
-        } else {
-            let idx = self.palette_state.selected().unwrap_or(0).min(len - 1);
-            self.palette_state.select(Some(idx));
-        }
     }
 
     pub(crate) fn palette_next(&mut self) {

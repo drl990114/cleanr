@@ -1,11 +1,29 @@
+use unicode_segmentation::UnicodeSegmentation;
+
 use super::*;
 
 impl Workbench {
     pub fn handle_key(&mut self, key: KeyEvent) {
-        if key.kind != KeyEventKind::Press {
+        if key.kind != KeyEventKind::Press
+            && (key.kind != KeyEventKind::Repeat || !self.is_repeatable_key(key))
+        {
             return;
         }
         self.ime_guard_phase = !self.ime_guard_phase;
+
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(self.mode, Mode::Command) {
+                self.close_command();
+            } else if self.confirmation_pending() {
+                self.cancel_confirmation();
+            } else if self.is_operation_running() {
+                self.status = self.i18n.t("status_operation_running");
+            } else {
+                self.should_quit = true;
+                self.clear_pending();
+            }
+            return;
+        }
 
         if self.help_open {
             if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'h' | 'H')) {
@@ -36,19 +54,14 @@ impl Workbench {
     }
 
     pub(crate) fn handle_normal_key(&mut self, key: KeyEvent) {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.should_quit = true;
-            self.clear_pending();
-            return;
-        }
-
         if self.pending_key == Some('g') {
             if let KeyCode::Char('g') = key.code {
                 let count = self.take_count_or(1);
                 self.select_line(count);
+                self.clear_pending();
+                return;
             }
             self.clear_pending();
-            return;
         }
 
         if let KeyCode::Char(d) = key.code
@@ -60,7 +73,11 @@ impl Workbench {
 
         match key.code {
             KeyCode::Char('q') => {
-                self.should_quit = true;
+                if self.is_operation_running() {
+                    self.status = self.i18n.t("status_operation_running");
+                } else {
+                    self.should_quit = true;
+                }
                 self.clear_pending();
             }
             KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('H') => {
@@ -116,8 +133,9 @@ impl Workbench {
                 self.clear_pending();
             }
             KeyCode::Char('c') | KeyCode::Char('C') => {
-                let executor = TrashExecutor;
-                self.clean_with_executor(CleanupIntent::UserRequest, &executor);
+                self.dispatch(ActionRequest::Clean {
+                    intent: CleanupIntent::UserRequest,
+                });
                 self.clear_pending();
             }
             KeyCode::Char('/') => {
@@ -169,28 +187,38 @@ impl Workbench {
                 self.submit_input();
             }
             KeyCode::Backspace => {
-                if self.input.len() <= 1 {
+                if self.input.len() <= self.command_prefix_len() {
                     self.close_command();
                 } else {
-                    self.input.pop();
-                    self.palette_open = self.input.starts_with('/');
-                    self.clamp_palette_selection();
+                    self.backspace_command_char();
                 }
             }
+            KeyCode::Delete => self.delete_command_char(),
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.delete_word_back();
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let prefix = self.input.chars().next().unwrap_or('/');
-                self.input.clear();
-                self.input.push(prefix);
-                self.palette_open = prefix == '/';
-                self.clamp_palette_selection();
+                self.delete_to_command_start();
             }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.push(ch);
-                self.palette_open = self.input.starts_with('/');
-                self.clamp_palette_selection();
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.delete_to_command_end();
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input_cursor = self.command_prefix_len();
+            }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.input_cursor = self.input.len();
+            }
+            KeyCode::Left => self.move_command_cursor_left(),
+            KeyCode::Right => self.move_command_cursor_right(),
+            KeyCode::Home => self.input_cursor = self.command_prefix_len(),
+            KeyCode::End => self.input_cursor = self.input.len(),
+            KeyCode::Char(ch)
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                self.insert_command_text(&ch.to_string());
             }
             KeyCode::Up => {
                 if self.palette_open {
@@ -227,30 +255,41 @@ impl Workbench {
     pub(crate) fn open_command(&mut self, prefix: char) {
         self.mode = Mode::Command;
         self.input = String::from(prefix);
+        self.input_cursor = self.input.len();
         self.palette_open = prefix == '/';
         self.palette_state.select(Some(0));
     }
 
     pub(crate) fn delete_word_back(&mut self) {
-        let prefix_len = 1;
-        if self.input.len() <= prefix_len {
+        let prefix_len = self.command_prefix_len();
+        if self.input_cursor <= prefix_len {
             return;
         }
-        let rest = &self.input[prefix_len..];
-        let mut i = rest.len();
-        while i > 0 && rest.as_bytes()[i - 1].is_ascii_whitespace() {
-            i -= 1;
+
+        let end = self.input_cursor;
+        let mut start = end;
+        while let Some(previous) = previous_grapheme_boundary(&self.input, start, prefix_len) {
+            let grapheme = &self.input[previous..start];
+            if !grapheme.chars().all(char::is_whitespace) {
+                break;
+            }
+            start = previous;
         }
-        while i > 0 && !rest.as_bytes()[i - 1].is_ascii_whitespace() {
-            i -= 1;
+        while let Some(previous) = previous_grapheme_boundary(&self.input, start, prefix_len) {
+            let grapheme = &self.input[previous..start];
+            if grapheme.chars().all(char::is_whitespace) {
+                break;
+            }
+            start = previous;
         }
-        self.input.truncate(prefix_len + i);
-        self.palette_open = self.input.starts_with('/');
-        self.clamp_palette_selection();
+        self.input.replace_range(start..end, "");
+        self.input_cursor = start;
+        self.refresh_palette_query();
     }
 
     pub(crate) fn close_command(&mut self) {
         self.input.clear();
+        self.input_cursor = 0;
         self.mode = Mode::Normal;
         self.palette_open = false;
         self.palette_state.select(None);
@@ -265,6 +304,7 @@ impl Workbench {
 
     pub fn submit_input(&mut self) {
         let input = std::mem::take(&mut self.input);
+        self.input_cursor = 0;
         self.mode = Mode::Normal;
         self.palette_open = false;
         self.clear_pending();
@@ -310,4 +350,161 @@ impl Workbench {
 
         self.status = self.i18n.t("status_help");
     }
+
+    /// Insert bracketed-paste content into the single-line command editor. Newlines and tabs are
+    /// folded to spaces so pasted shell paths cannot accidentally submit a second command.
+    pub(crate) fn handle_paste(&mut self, value: &str) {
+        if !matches!(self.mode, Mode::Command) {
+            return;
+        }
+
+        let mut sanitized = String::with_capacity(value.len());
+        let mut last_was_space = false;
+        for ch in value.chars() {
+            let ch = if matches!(ch, '\r' | '\n' | '\t') {
+                ' '
+            } else {
+                ch
+            };
+            if ch.is_control() {
+                continue;
+            }
+            if ch == ' ' && last_was_space {
+                continue;
+            }
+            last_was_space = ch == ' ';
+            sanitized.push(ch);
+        }
+        if !sanitized.is_empty() {
+            self.insert_command_text(&sanitized);
+        }
+    }
+
+    fn command_prefix_len(&self) -> usize {
+        self.input.chars().next().map_or(0, char::len_utf8)
+    }
+
+    fn insert_command_text(&mut self, value: &str) {
+        self.input_cursor = self.input_cursor.min(self.input.len());
+        while !self.input.is_char_boundary(self.input_cursor) {
+            self.input_cursor = self.input_cursor.saturating_sub(1);
+        }
+        self.input.insert_str(self.input_cursor, value);
+        self.input_cursor = self.input_cursor.saturating_add(value.len());
+        self.refresh_palette_query();
+    }
+
+    fn backspace_command_char(&mut self) {
+        let prefix_len = self.command_prefix_len();
+        let Some(previous) = previous_grapheme_boundary(&self.input, self.input_cursor, prefix_len)
+        else {
+            return;
+        };
+        self.input.replace_range(previous..self.input_cursor, "");
+        self.input_cursor = previous;
+        self.refresh_palette_query();
+    }
+
+    fn delete_command_char(&mut self) {
+        if self.input_cursor >= self.input.len() {
+            return;
+        }
+        let next = self.input[self.input_cursor..]
+            .graphemes(true)
+            .next()
+            .map_or(self.input.len(), |grapheme| {
+                self.input_cursor + grapheme.len()
+            });
+        self.input.replace_range(self.input_cursor..next, "");
+        self.refresh_palette_query();
+    }
+
+    fn delete_to_command_start(&mut self) {
+        let prefix_len = self.command_prefix_len();
+        if self.input_cursor <= prefix_len {
+            return;
+        }
+        self.input.replace_range(prefix_len..self.input_cursor, "");
+        self.input_cursor = prefix_len;
+        self.refresh_palette_query();
+    }
+
+    fn delete_to_command_end(&mut self) {
+        if self.input_cursor >= self.input.len() {
+            return;
+        }
+        self.input.truncate(self.input_cursor);
+        self.refresh_palette_query();
+    }
+
+    fn move_command_cursor_left(&mut self) {
+        let prefix_len = self.command_prefix_len();
+        if let Some(previous) =
+            previous_grapheme_boundary(&self.input, self.input_cursor, prefix_len)
+        {
+            self.input_cursor = previous;
+        }
+    }
+
+    fn move_command_cursor_right(&mut self) {
+        if self.input_cursor >= self.input.len() {
+            return;
+        }
+        self.input_cursor += self.input[self.input_cursor..]
+            .graphemes(true)
+            .next()
+            .map_or(0, str::len);
+    }
+
+    fn refresh_palette_query(&mut self) {
+        self.palette_open = self.input.starts_with('/');
+        if self.palette_open && !self.filtered_palette_commands().is_empty() {
+            self.palette_state.select(Some(0));
+        } else {
+            self.palette_state.select(None);
+        }
+    }
+
+    fn is_repeatable_key(&self, key: KeyEvent) -> bool {
+        if self.help_open {
+            return false;
+        }
+        if self.confirmation_pending() {
+            return matches!(key.code, KeyCode::Left | KeyCode::Right);
+        }
+        if matches!(self.mode, Mode::Command) {
+            return matches!(
+                key.code,
+                KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Home
+                    | KeyCode::End
+            ) || matches!(key.code, KeyCode::Char(_))
+                && !key.modifiers.contains(KeyModifiers::ALT);
+        }
+        matches!(
+            key.code,
+            KeyCode::Char('j' | 'k')
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+        ) || matches!(key.code, KeyCode::Char('d' | 'u' | 'f' | 'b'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+    }
+}
+
+fn previous_grapheme_boundary(value: &str, index: usize, floor: usize) -> Option<usize> {
+    if index <= floor {
+        return None;
+    }
+    value[..index]
+        .grapheme_indices(true)
+        .next_back()
+        .map(|(offset, _)| offset)
+        .filter(|offset| *offset >= floor)
 }

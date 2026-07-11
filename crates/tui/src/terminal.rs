@@ -1,10 +1,14 @@
-use std::{io, path::PathBuf, time::Duration};
+use std::{
+    io,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use cleanr_config::Config;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event},
     execute,
     terminal::{
         Clear as TerminalClear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
@@ -32,6 +36,9 @@ pub struct UpdateNotice {
 }
 
 pub fn run(options: TuiOptions) -> Result<()> {
+    const ANIMATION_INTERVAL: Duration = Duration::from_millis(80);
+    const IDLE_WAKE_INTERVAL: Duration = Duration::from_secs(1);
+
     let (registry, i18n) = load_runtime(&options.config)?;
     let theme = resolve_theme(options.config.ui.theme);
     let mut app = Workbench::new(options.roots, options.config, registry, i18n, theme);
@@ -50,6 +57,7 @@ pub fn run(options: TuiOptions) -> Result<()> {
         EnterAlternateScreen,
         TerminalClear(ClearType::All),
         MoveTo(0, 0),
+        EnableBracketedPaste,
         Hide
     )
     .context("failed to enter alternate screen")?;
@@ -60,23 +68,47 @@ pub fn run(options: TuiOptions) -> Result<()> {
         .clear()
         .context("failed to clear terminal before rendering")?;
 
+    let mut redraw = true;
+    let mut last_animation = Instant::now();
     loop {
-        app.poll_tasks();
-        let area = terminal.draw(|frame| render(frame, &mut app))?.area;
-        if matches!(app.mode, Mode::Normal) {
-            terminal.set_cursor_position(ime_guard_position(area))?;
-            terminal.hide_cursor()?;
+        redraw |= app.poll_tasks();
+        if app.has_background_task() && last_animation.elapsed() >= ANIMATION_INTERVAL {
+            redraw |= app.advance_animation();
+            last_animation = Instant::now();
+        }
+
+        if redraw {
+            let area = terminal.draw(|frame| render(frame, &mut app))?.area;
+            if matches!(app.mode, Mode::Normal) {
+                terminal.set_cursor_position(ime_guard_position(area))?;
+                terminal.hide_cursor()?;
+            }
+            redraw = false;
         }
 
         if app.should_quit {
             break;
         }
 
-        if event::poll(Duration::from_millis(100))? {
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            app.handle_key(key);
+        let timeout = if app.has_background_task() {
+            ANIMATION_INTERVAL.saturating_sub(last_animation.elapsed())
+        } else {
+            IDLE_WAKE_INTERVAL
+        };
+        if !event::poll(timeout)? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) => {
+                app.handle_key(key);
+                redraw = true;
+            }
+            Event::Paste(value) => {
+                app.handle_paste(&value);
+                redraw = true;
+            }
+            Event::Resize(_, _) => redraw = true,
+            _ => {}
         }
     }
 
@@ -88,6 +120,11 @@ struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            DisableBracketedPaste,
+            Show,
+            LeaveAlternateScreen
+        );
     }
 }

@@ -17,6 +17,7 @@ impl Workbench {
             theme,
             state_dir: default_state_dir(),
             input: String::new(),
+            input_cursor: 0,
             mode: Mode::Normal,
             view: View::Home,
             palette_open: false,
@@ -27,6 +28,7 @@ impl Workbench {
             scan_as_of: Utc::now(),
             scan_issues: Vec::new(),
             analysis: None,
+            candidate_ids_by_path: HashMap::new(),
             selection: UserSelection::default(),
             plan: None,
             task_log: Vec::new(),
@@ -35,6 +37,11 @@ impl Workbench {
             scan_rx: None,
             scan_cancel: None,
             scan_progress: None,
+            operation_rx: None,
+            operation_kind: None,
+            usage_order: Vec::new(),
+            usage_max_size: 0,
+            usage_descendant_counts: Vec::new(),
             review_after_scan: false,
             usage_after_scan: false,
             clean_waiting_for_confirmation: false,
@@ -74,6 +81,16 @@ impl Workbench {
     #[must_use]
     pub fn is_scan_running(&self) -> bool {
         self.scan_rx.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn is_operation_running(&self) -> bool {
+        self.operation_rx.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn has_background_task(&self) -> bool {
+        self.is_scan_running() || self.is_operation_running()
     }
 
     #[must_use]

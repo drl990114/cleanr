@@ -416,12 +416,13 @@ fn build_analysis_report_inner(
         policy: &policy,
         safety_policy,
     };
-    let activity_by_path = activity_by_path(entries, as_of, issues);
+    let issue_scopes = IssueScopes::new(issues);
+    let activity_by_path = activity_by_path(entries, as_of, &issue_scopes);
     let mut candidates = entries
         .iter()
         .filter(|entry| !entry.rule_hits.is_empty())
         .map(|entry| {
-            let coverage = candidate_coverage(&entry.path, issues);
+            let coverage = issue_scopes.coverage(&entry.path);
             let rules = resolve_rules(&entry.rule_hits);
             let activity = activity_by_path
                 .get(&entry.path)
@@ -549,7 +550,7 @@ impl ActivityFacts {
 fn activity_by_path(
     entries: &[ScanEntry],
     as_of: DateTime<Utc>,
-    issues: &[ScanIssue],
+    issue_scopes: &IssueScopes,
 ) -> HashMap<PathBuf, ActivityFacts> {
     let mut activity = entries
         .iter()
@@ -571,32 +572,47 @@ fn activity_by_path(
     }
 
     for (path, facts) in &mut activity {
-        if issue_with_unknown_scope(issues)
-            || issues.iter().any(|issue| {
-                issue
-                    .path
-                    .as_deref()
-                    .is_some_and(|scope| scope.starts_with(path))
-            })
-        {
+        if issue_scopes.unknown || issue_scopes.affected_ancestors.contains(path) {
             facts.has_missing_timestamp = true;
         }
     }
     activity
 }
 
+#[cfg(test)]
 fn candidate_coverage(path: &Path, issues: &[ScanIssue]) -> CandidateCoverage {
-    if issue_with_unknown_scope(issues) {
-        return CandidateCoverage::Unknown;
+    IssueScopes::new(issues).coverage(path)
+}
+
+struct IssueScopes {
+    unknown: bool,
+    affected_ancestors: HashSet<PathBuf>,
+}
+
+impl IssueScopes {
+    fn new(issues: &[ScanIssue]) -> Self {
+        let mut affected_ancestors = HashSet::new();
+        for path in issues.iter().filter_map(|issue| issue.path.as_deref()) {
+            affected_ancestors.extend(
+                path.ancestors()
+                    .filter(|ancestor| !ancestor.as_os_str().is_empty())
+                    .map(Path::to_path_buf),
+            );
+        }
+        Self {
+            unknown: issue_with_unknown_scope(issues),
+            affected_ancestors,
+        }
     }
-    if issues
-        .iter()
-        .filter_map(|issue| issue.path.as_deref())
-        .any(|scope| scope.starts_with(path))
-    {
-        CandidateCoverage::Partial
-    } else {
-        CandidateCoverage::Complete
+
+    fn coverage(&self, path: &Path) -> CandidateCoverage {
+        if self.unknown {
+            CandidateCoverage::Unknown
+        } else if self.affected_ancestors.contains(path) {
+            CandidateCoverage::Partial
+        } else {
+            CandidateCoverage::Complete
+        }
     }
 }
 
@@ -779,21 +795,23 @@ fn decision(state: RecommendationState, codes: BTreeSet<DecisionCode>) -> Recomm
 }
 
 fn resolve_overlaps(candidates: &mut [CandidateEvidence]) {
-    let mut suppressed = HashSet::new();
-    for left_index in 0..candidates.len() {
-        if suppressed.contains(&left_index) {
-            continue;
+    // Candidates are path-sorted by the caller. Every connected overlap cluster therefore starts
+    // with its shallowest candidate and occupies one contiguous descendant range. Walking those
+    // ranges avoids comparing every candidate with every other candidate.
+    let mut cluster_start = 0;
+    while cluster_start < candidates.len() {
+        let mut cluster_end = cluster_start + 1;
+        while cluster_end < candidates.len()
+            && candidates[cluster_end]
+                .local_path
+                .starts_with(&candidates[cluster_start].local_path)
+            && candidates[cluster_end].local_path != candidates[cluster_start].local_path
+        {
+            cluster_end += 1;
         }
-        let mut cluster = vec![left_index];
-        for right_index in (left_index + 1)..candidates.len() {
-            if candidates_overlap(
-                &candidates[left_index].local_path,
-                &candidates[right_index].local_path,
-            ) {
-                cluster.push(right_index);
-            }
-        }
+        let cluster = (cluster_start..cluster_end).collect::<Vec<_>>();
         if cluster.len() == 1 {
+            cluster_start = cluster_end;
             continue;
         }
         let primary_index = choose_primary(&cluster, candidates);
@@ -831,7 +849,6 @@ fn resolve_overlaps(candidates: &mut [CandidateEvidence]) {
             let primary_id = candidates[primary_index].id.clone();
             candidates[index].overlap = OverlapEvidence::Suppressed { by: primary_id };
             if candidates[index].recommendation.state == RecommendationState::Excluded {
-                suppressed.insert(index);
                 continue;
             }
             candidates[index]
@@ -842,13 +859,9 @@ fn resolve_overlaps(candidates: &mut [CandidateEvidence]) {
             candidates[index].recommendation.codes.dedup();
             candidates[index].recommendation.state = RecommendationState::Suppressed;
             candidates[index].recommendation.initial_selected = false;
-            suppressed.insert(index);
         }
+        cluster_start = cluster_end;
     }
-}
-
-fn candidates_overlap(left: &Path, right: &Path) -> bool {
-    left != right && (left.starts_with(right) || right.starts_with(left))
 }
 
 fn choose_primary(indices: &[usize], candidates: &[CandidateEvidence]) -> usize {

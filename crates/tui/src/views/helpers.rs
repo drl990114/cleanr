@@ -84,35 +84,15 @@ pub(crate) fn truncate_text(text: &str, max_width: usize) -> String {
 }
 
 pub(crate) fn display_width(text: &str) -> usize {
-    Line::from(text.to_string()).width()
+    UnicodeWidthStr::width(text)
 }
 
 fn take_width_from_start(text: &str, max_width: usize) -> String {
-    let mut width = 0usize;
-    let mut result = String::new();
-    for ch in text.chars() {
-        let char_width = display_width(&ch.to_string());
-        if width.saturating_add(char_width) > max_width {
-            break;
-        }
-        width = width.saturating_add(char_width);
-        result.push(ch);
-    }
-    result
+    text.unicode_truncate(max_width).0.to_string()
 }
 
 fn take_width_from_end(text: &str, max_width: usize) -> String {
-    let mut width = 0usize;
-    let mut result = Vec::new();
-    for ch in text.chars().rev() {
-        let char_width = display_width(&ch.to_string());
-        if width.saturating_add(char_width) > max_width {
-            break;
-        }
-        width = width.saturating_add(char_width);
-        result.push(ch);
-    }
-    result.into_iter().rev().collect()
+    text.unicode_truncate_start(max_width).0.to_string()
 }
 
 pub(crate) fn kind_label(kind: EntryKind) -> &'static str {
@@ -187,6 +167,79 @@ pub(crate) fn responsive_workspace(area: Rect, list_percent: u16) -> [Rect; 2] {
     [chunks[0], chunks[1]]
 }
 
+/// Keep the absolute selection visible and return only the rows needed for this frame.
+pub(crate) fn visible_list_window(
+    state: &mut ListState,
+    content_len: usize,
+    viewport_len: usize,
+) -> Range<usize> {
+    if content_len == 0 {
+        state.select(None);
+        *state.offset_mut() = 0;
+        return 0..0;
+    }
+
+    let viewport_len = viewport_len.max(1).min(content_len);
+    let selected = state.selected().map(|index| index.min(content_len - 1));
+    if selected != state.selected() {
+        state.select(selected);
+    }
+
+    let max_start = content_len.saturating_sub(viewport_len);
+    let mut start = state.offset().min(max_start);
+    if let Some(selected) = selected {
+        if selected < start {
+            start = selected;
+        } else if selected >= start.saturating_add(viewport_len) {
+            start = selected.saturating_add(1).saturating_sub(viewport_len);
+        }
+    }
+    start = start.min(max_start);
+    *state.offset_mut() = start;
+
+    start..start.saturating_add(viewport_len).min(content_len)
+}
+
+pub(crate) fn local_list_state(state: &ListState, window: &Range<usize>) -> ListState {
+    let selected = state.selected().and_then(|selected| {
+        selected
+            .checked_sub(window.start)
+            .filter(|local| *local < window.len())
+    });
+    ListState::default().with_selected(selected)
+}
+
+pub(crate) fn render_list_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    content_len: usize,
+    viewport_len: usize,
+    position: usize,
+    theme: Theme,
+) {
+    if content_len <= viewport_len || area.width == 0 || area.height <= 1 {
+        return;
+    }
+
+    let scrollbar_area = Rect::new(
+        area.right().saturating_sub(1),
+        area.y.saturating_add(1),
+        1,
+        area.height.saturating_sub(1),
+    );
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .thumb_symbol("┃")
+        .track_style(Style::default().fg(theme.border))
+        .thumb_style(Style::default().fg(theme.accent));
+    let mut scrollbar_state = ScrollbarState::new(content_len)
+        .position(position)
+        .viewport_content_length(viewport_len);
+    frame.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
+}
+
 pub(crate) fn fluid_content_rect(area: Rect, max_width: u16, desired_height: u16) -> Rect {
     let side_margin: u16 = match area.width {
         0..=95 => 0,
@@ -211,17 +264,31 @@ pub(crate) fn ime_guard_position(area: Rect) -> Position {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn command_cursor_position(area: Rect, input: &str) -> Option<Position> {
+    command_cursor_position_at(area, input, input.len())
+}
+
+#[cfg(test)]
+pub(crate) fn command_cursor_position_at(
+    area: Rect,
+    input: &str,
+    cursor: usize,
+) -> Option<Position> {
     if area.is_empty() {
         return None;
     }
     let prefix_width = 3usize;
-    let input_width = input
+    let prefix_bytes = input
         .chars()
         .next()
         .map_or(0, char::len_utf8)
         .min(input.len());
-    let rest_width = Line::from(input[input_width..].to_string()).width();
+    let mut cursor = cursor.min(input.len());
+    while cursor > prefix_bytes && !input.is_char_boundary(cursor) {
+        cursor = cursor.saturating_sub(1);
+    }
+    let rest_width = display_width(&input[prefix_bytes..cursor]);
     let offset = u16::try_from(prefix_width.saturating_add(rest_width)).unwrap_or(u16::MAX);
     Some(Position::new(
         area.x
@@ -229,6 +296,47 @@ pub(crate) fn command_cursor_position(area: Rect, input: &str) -> Option<Positio
             .min(area.right().saturating_sub(1)),
         area.y,
     ))
+}
+
+/// Return a single-line viewport that keeps the command cursor visible without splitting a
+/// grapheme cluster. The cursor column is relative to the returned text.
+pub(crate) fn command_input_view(input: &str, cursor: usize, max_width: usize) -> (String, usize) {
+    if max_width == 0 {
+        return (String::new(), 0);
+    }
+    let prefix_bytes = input
+        .chars()
+        .next()
+        .map_or(0, char::len_utf8)
+        .min(input.len());
+    let mut cursor = cursor.clamp(prefix_bytes, input.len());
+    while cursor > prefix_bytes && !input.is_char_boundary(cursor) {
+        cursor = cursor.saturating_sub(1);
+    }
+
+    let before = &input[prefix_bytes..cursor];
+    let after = &input[cursor..];
+    let before_width = display_width(before);
+    let after_width = display_width(after);
+    if before_width.saturating_add(after_width) <= max_width {
+        return (format!("{before}{after}"), before_width);
+    }
+
+    if before_width < max_width {
+        let (visible_after, _) = after.unicode_truncate(max_width - before_width);
+        return (format!("{before}{visible_after}"), before_width);
+    }
+
+    let marker = "…";
+    let marker_width = display_width(marker).min(max_width);
+    let after_budget = usize::from(!after.is_empty() && max_width > marker_width);
+    let before_budget = max_width.saturating_sub(marker_width + after_budget);
+    let (visible_before, visible_before_width) = before.unicode_truncate_start(before_budget);
+    let (visible_after, _) = after.unicode_truncate(after_budget);
+    (
+        format!("{marker}{visible_before}{visible_after}"),
+        marker_width + visible_before_width,
+    )
 }
 
 pub(crate) fn centered_bounded_rect(

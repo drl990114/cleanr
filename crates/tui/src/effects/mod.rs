@@ -24,9 +24,25 @@ pub(crate) enum TaskEvent {
     ScanFinished(std::result::Result<ScanReport, String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OperationKind {
+    Cleanup,
+    Restore,
+}
+
+pub(crate) enum OperationEvent {
+    CleanupFinished(std::result::Result<ExecutionManifest, String>),
+    RestoreFinished(std::result::Result<RestoreManifest, String>),
+}
+
 pub(crate) struct ScanEffect {
     pub receiver: Receiver<TaskEvent>,
     pub cancellation: Arc<AtomicBool>,
+}
+
+pub(crate) struct OperationEffect {
+    pub kind: OperationKind,
+    pub receiver: Receiver<OperationEvent>,
 }
 
 pub(crate) fn load_runtime(config: &Config) -> Result<(RuleRegistry, I18n)> {
@@ -42,7 +58,9 @@ pub(crate) fn load_runtime(config: &Config) -> Result<(RuleRegistry, I18n)> {
 }
 
 pub(crate) fn spawn_scan(roots: Vec<PathBuf>, options: ScanOptions) -> Result<ScanEffect> {
-    let (sender, receiver) = mpsc::channel();
+    // Progress is lossy by design: the UI only needs the newest sample. A one-item channel keeps a
+    // fast filesystem walk from queueing thousands of stale paths while the terminal is drawing.
+    let (sender, receiver) = mpsc::sync_channel(1);
     let cancellation = Arc::new(AtomicBool::new(false));
     let worker_cancellation = Arc::clone(&cancellation);
     std::thread::Builder::new()
@@ -53,7 +71,7 @@ pub(crate) fn spawn_scan(roots: Vec<PathBuf>, options: ScanOptions) -> Result<Sc
                 &options,
                 &worker_cancellation,
                 |progress| {
-                    let _ = sender.send(TaskEvent::ScanProgress(progress));
+                    let _ = sender.try_send(TaskEvent::ScanProgress(progress));
                 },
             )
             .map_err(|error| error.to_string());
@@ -63,6 +81,41 @@ pub(crate) fn spawn_scan(roots: Vec<PathBuf>, options: ScanOptions) -> Result<Sc
     Ok(ScanEffect {
         receiver,
         cancellation,
+    })
+}
+
+pub(crate) fn spawn_cleanup(plan: CleanupPlan, state_dir: PathBuf) -> Result<OperationEffect> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("cleanr-cleanup".to_string())
+        .spawn(move || {
+            let executor = cleanr_tasks::TrashExecutor;
+            let result = execute_cleanup(&plan, &executor, &state_dir, true)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(OperationEvent::CleanupFinished(result));
+        })
+        .context("failed to spawn cleanup worker")?;
+    Ok(OperationEffect {
+        kind: OperationKind::Cleanup,
+        receiver,
+    })
+}
+
+pub(crate) fn spawn_restore(
+    manifest: ExecutionManifest,
+    state_dir: PathBuf,
+) -> Result<OperationEffect> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("cleanr-restore".to_string())
+        .spawn(move || {
+            let result = restore_cleanup(&manifest, &state_dir).map_err(|error| error.to_string());
+            let _ = sender.send(OperationEvent::RestoreFinished(result));
+        })
+        .context("failed to spawn restore worker")?;
+    Ok(OperationEffect {
+        kind: OperationKind::Restore,
+        receiver,
     })
 }
 

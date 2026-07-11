@@ -333,19 +333,24 @@ impl RuleRegistry {
             }
         }
         if let Some(extension) = entry.path.extension().and_then(|value| value.to_str()) {
-            candidates.extend(
-                self.extension_index
-                    .get(&extension.to_ascii_lowercase())
-                    .into_iter()
-                    .flatten()
-                    .copied(),
-            );
+            if let Some(indexed) = self.extension_index.get(extension) {
+                candidates.extend(indexed.iter().copied());
+            } else {
+                let extension = extension.to_ascii_lowercase();
+                candidates.extend(
+                    self.extension_index
+                        .get(&extension)
+                        .into_iter()
+                        .flatten()
+                        .copied(),
+                );
+            }
         }
         if candidates.len() > 1 {
             candidates.sort_unstable();
             candidates.dedup();
         }
-        let normalized_path = candidates
+        let path_for_glob = candidates
             .iter()
             .any(|(pack_index, rule_index)| {
                 self.packs
@@ -353,7 +358,7 @@ impl RuleRegistry {
                     .and_then(|pack| pack.compiled_rules.get(*rule_index))
                     .is_some_and(|compiled| compiled.path_glob.is_some())
             })
-            .then(|| normalized_path(&entry.path));
+            .then_some(entry.path.as_path());
 
         candidates
             .into_iter()
@@ -366,7 +371,7 @@ impl RuleRegistry {
                     rule,
                     compiled,
                     file_name.as_deref(),
-                    normalized_path.as_deref(),
+                    path_for_glob,
                     as_of,
                 )
                 .then(|| RuleHit {
@@ -568,7 +573,7 @@ fn matches_rule(
     rule: &RuleDefinition,
     compiled: &CompiledRule,
     file_name: Option<&str>,
-    normalized_path: Option<&str>,
+    path_for_glob: Option<&Path>,
     as_of: DateTime<Utc>,
 ) -> bool {
     let matcher = &rule.matcher;
@@ -610,7 +615,7 @@ fn matches_rule(
         }
     }
     if let Some(matcher) = &compiled.path_glob {
-        let Some(path) = normalized_path else {
+        let Some(path) = path_for_glob else {
             return false;
         };
         if !matcher.is_match(path) {
@@ -627,10 +632,6 @@ fn is_toml_file(path: &Path) -> bool {
 #[must_use]
 pub fn rule_pack_schema() -> serde_json::Value {
     serde_json::to_value(schema_for!(RulePack)).expect("rule pack schema serializes")
-}
-
-fn normalized_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 const BUILTIN_DEV_MANIFEST: &str = include_str!("../builtin-plugins/builtin-dev/plugin.toml");

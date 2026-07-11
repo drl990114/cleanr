@@ -12,7 +12,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &mut Workbench) {
     let command_height = area
         .height
         .saturating_sub(header_height + status_height)
-        .min(2);
+        .min(3);
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -29,7 +29,7 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &mut Workbench) {
     render_status(frame, layout[3], app);
 
     if app.palette_open {
-        let commands = app.filtered_palette_commands().len();
+        let commands = app.filtered_palette_commands().len().min(8);
         let popup = bottom_bounded_rect(
             layout[1],
             layout[1].width.saturating_sub(4),
@@ -55,9 +55,7 @@ pub(crate) fn render_header(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
         area,
     );
 
-    let roots = join_paths(&app.roots);
-
-    let status = if app.is_scan_running() {
+    let status = if app.operation_kind.is_some() {
         format!("{} {}", spinner_frame(app.animation_tick), app.status)
     } else {
         app.status.clone()
@@ -68,13 +66,22 @@ pub(crate) fn render_header(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
         .split(area);
     let top = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(46), Constraint::Percentage(54)])
+        .constraints(if rows[0].width >= 72 {
+            [Constraint::Percentage(46), Constraint::Percentage(54)]
+        } else {
+            [Constraint::Percentage(68), Constraint::Percentage(32)]
+        })
         .split(rows[0]);
+    let roots_label = app.i18n.t("label_roots");
+    let roots_budget = (top[1].width as usize)
+        .saturating_sub(display_width(&roots_label))
+        .saturating_sub(4);
+    let roots = truncate_text(&join_paths(&app.roots), roots_budget);
     let brand = Line::from(vec![
         Span::styled(
             "  cleanr",
             Style::default()
-                .fg(app.theme.accent)
+                .fg(app.theme.magenta)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -88,7 +95,7 @@ pub(crate) fn render_header(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                format!("{}  ", app.i18n.t("label_roots")),
+                format!("{roots_label}  "),
                 Style::default().fg(app.theme.fg_dim),
             ),
             Span::styled(roots, Style::default().fg(app.theme.fg_dim)),
@@ -100,10 +107,10 @@ pub(crate) fn render_header(frame: &mut Frame<'_>, area: Rect, app: &Workbench) 
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("  •  ", Style::default().fg(app.theme.accent)),
+            Span::styled("  ›  ", Style::default().fg(app.theme.accent)),
             Span::styled(
                 status,
-                Style::default().fg(if app.is_scan_running() {
+                Style::default().fg(if app.has_background_task() {
                     app.theme.fg
                 } else {
                     app.theme.fg_dim

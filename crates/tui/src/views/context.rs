@@ -11,34 +11,84 @@ pub(crate) fn render_context_workspace(
     detail_title: String,
     details: Vec<Line<'static>>,
 ) -> u16 {
+    let item_count = items.len();
+    render_context_workspace_virtualized(
+        frame,
+        area,
+        state,
+        theme,
+        title,
+        item_count,
+        move |window| {
+            items
+                .into_iter()
+                .skip(window.start)
+                .take(window.len())
+                .collect()
+        },
+        detail_title,
+        details,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_context_workspace_virtualized<F>(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    state: &mut ListState,
+    theme: Theme,
+    title: String,
+    item_count: usize,
+    items_for_window: F,
+    detail_title: String,
+    details: Vec<Line<'static>>,
+) -> u16
+where
+    F: FnOnce(Range<usize>) -> Vec<ListItem<'static>>,
+{
     let wide = area.width >= 88;
     let workspace = fluid_content_rect(area, 220, area.height);
     let columns = responsive_workspace(workspace, 56);
+    let viewport_height = columns[0].height.saturating_sub(1).max(1) as usize;
+    let window = visible_list_window(state, item_count, viewport_height);
+    let mut local_state = local_list_state(state, &window);
+    let has_scrollbar = item_count > viewport_height;
     let list_borders = if wide {
         Borders::TOP | Borders::RIGHT
     } else {
         Borders::TOP
     };
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(list_borders)
-                .border_style(Style::default().fg(theme.border))
-                .title(format!(" {title} "))
-                .title_style(
-                    Style::default()
-                        .fg(theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-        )
+    let mut list_block = Block::default()
+        .borders(list_borders)
+        .border_style(Style::default().fg(theme.border))
+        .title(format!(" {title} "))
+        .title_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    if has_scrollbar && !wide {
+        list_block = list_block.padding(Padding::new(0, 1, 0, 0));
+    }
+
+    let list = List::new(items_for_window(window.clone()))
+        .block(list_block)
         .highlight_style(
             Style::default()
-                .bg(theme.highlight_bg)
-                .fg(theme.highlight_fg),
+                .fg(theme.highlight_fg)
+                .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("› ");
-    frame.render_stateful_widget(list, columns[0], state);
+    frame.render_stateful_widget(list, columns[0], &mut local_state);
+    render_list_scrollbar(
+        frame,
+        columns[0],
+        item_count,
+        viewport_height,
+        state.selected().unwrap_or(window.start),
+        theme,
+    );
 
     let details = Paragraph::new(details).wrap(Wrap { trim: true }).block(
         Block::default()
@@ -53,7 +103,7 @@ pub(crate) fn render_context_workspace(
             ),
     );
     frame.render_widget(details, columns[1]);
-    columns[0].height.saturating_sub(1).max(1)
+    u16::try_from(viewport_height).unwrap_or(u16::MAX)
 }
 
 pub(crate) fn render_languages(frame: &mut Frame<'_>, area: Rect, app: &mut Workbench) {

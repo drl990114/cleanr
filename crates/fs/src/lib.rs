@@ -499,17 +499,11 @@ impl IgnoreMatcher {
         {
             return true;
         }
-        let absolute = normalized_path(path);
-        let relative = path
-            .strip_prefix(root)
-            .map(normalized_path)
-            .unwrap_or_default();
-        self.patterns.is_match(&absolute) || self.patterns.is_match(&relative)
+        self.patterns.is_match(path)
+            || path
+                .strip_prefix(root)
+                .is_ok_and(|relative| self.patterns.is_match(relative))
     }
-}
-
-fn normalized_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 fn normalize_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {

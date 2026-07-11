@@ -26,17 +26,17 @@ impl Theme {
             bg: Color::Reset,
             surface: Color::Reset,
             surface_alt: Color::DarkGray,
-            fg: Color::Gray,
+            fg: Color::Reset,
             fg_dim: Color::DarkGray,
             border: Color::DarkGray,
             accent: Color::Cyan,
-            ok: Color::LightGreen,
+            ok: Color::Green,
             warn: Color::Yellow,
-            danger: Color::LightRed,
-            cyan: Color::LightCyan,
-            magenta: Color::LightMagenta,
-            highlight_bg: Color::DarkGray,
-            highlight_fg: Color::White,
+            danger: Color::Red,
+            cyan: Color::Cyan,
+            magenta: Color::Magenta,
+            highlight_bg: Color::Reset,
+            highlight_fg: Color::Cyan,
         }
     }
 
@@ -46,7 +46,7 @@ impl Theme {
             bg: Color::Reset,
             surface: Color::Reset,
             surface_alt: Color::Gray,
-            fg: Color::Black,
+            fg: Color::Reset,
             fg_dim: Color::DarkGray,
             border: Color::Gray,
             accent: Color::Blue,
@@ -55,8 +55,8 @@ impl Theme {
             danger: Color::Red,
             cyan: Color::Cyan,
             magenta: Color::Magenta,
-            highlight_bg: Color::Gray,
-            highlight_fg: Color::White,
+            highlight_bg: Color::Reset,
+            highlight_fg: Color::Blue,
         }
     }
 }

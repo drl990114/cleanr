@@ -1,11 +1,11 @@
 use super::*;
 use crate::{
-    app::{ConfirmChoice, View},
+    app::{ConfirmChoice, Mode, View},
     commands::{ActionRequest, CleanupIntent, palette_command_invocation},
     views::{
-        bottom_bounded_rect, centered_bounded_rect, command_cursor_position, display_width,
-        fluid_content_rect, ime_guard_position, render, scan_loading_bar_sample, truncate_text,
-        usage_descendant_count,
+        bottom_bounded_rect, centered_bounded_rect, command_cursor_position, command_input_view,
+        display_width, fluid_content_rect, ime_guard_position, render, scan_loading_bar_sample,
+        truncate_text, usage_descendant_count, visible_list_window,
     },
 };
 use cleanr_config::Config;
@@ -24,6 +24,7 @@ use ratatui::{
     backend::TestBackend,
     layout::{Position, Rect},
     style::Color,
+    widgets::ListState,
 };
 use std::{collections::BTreeMap, fs, path::PathBuf, thread, time::Duration};
 
@@ -41,6 +42,15 @@ fn ctrl(code: KeyCode) -> KeyEvent {
         code,
         modifiers: KeyModifiers::CONTROL,
         kind: KeyEventKind::Press,
+        state: crossterm::event::KeyEventState::empty(),
+    }
+}
+
+fn repeat(code: KeyCode) -> KeyEvent {
+    KeyEvent {
+        code,
+        modifiers: KeyModifiers::empty(),
+        kind: KeyEventKind::Repeat,
         state: crossterm::event::KeyEventState::empty(),
     }
 }
@@ -556,6 +566,30 @@ fn scan_view_can_render_selection_beyond_old_candidate_cap() {
 }
 
 #[test]
+fn scan_view_virtualizes_ten_thousand_candidates_and_keeps_last_selected_visible() {
+    let root = PathBuf::from("/workspace");
+    let mut app = app(root.clone());
+    let candidate_count = 10_000usize;
+    app.entries = (0..candidate_count)
+        .map(|index| ScanEntry {
+            path: root.join(format!("candidate-{index:05}")),
+            kind: EntryKind::File,
+            size_bytes: u64::try_from(index).expect("candidate index fits in u64"),
+            modified_at: None,
+            rule_hits: vec![test_rule_hit("generated")],
+        })
+        .collect();
+    app.view = View::Scan;
+    app.list_state.select(Some(candidate_count - 1));
+
+    let screen = render_text(&mut app, 120, 24);
+
+    assert!(screen.contains("candidate-09999"), "{screen}");
+    assert_eq!(app.list_state.selected(), Some(candidate_count - 1));
+    assert!(app.list_state.offset() > 0);
+}
+
+#[test]
 fn restore_view_can_render_selection_beyond_old_history_cap() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = app(temp.path().to_path_buf());
@@ -653,6 +687,76 @@ fn adaptive_rects_never_exceed_terminal_area() {
 }
 
 #[test]
+fn visible_list_window_preserves_visible_offset_and_clamps_selection() {
+    let mut state = ListState::default().with_offset(4).with_selected(Some(6));
+
+    assert_eq!(visible_list_window(&mut state, 10, 3), 4..7);
+    assert_eq!(state.offset(), 4);
+    assert_eq!(state.selected(), Some(6));
+
+    state.select(Some(8));
+    assert_eq!(visible_list_window(&mut state, 10, 3), 6..9);
+    assert_eq!(state.offset(), 6);
+
+    state.select(Some(1));
+    assert_eq!(visible_list_window(&mut state, 10, 3), 1..4);
+    assert_eq!(state.offset(), 1);
+
+    *state.offset_mut() = usize::MAX;
+    state.select(Some(usize::MAX));
+    assert_eq!(visible_list_window(&mut state, 10, 4), 6..10);
+    assert_eq!(state.offset(), 6);
+    assert_eq!(state.selected(), Some(9));
+
+    assert_eq!(visible_list_window(&mut state, 0, 4), 0..0);
+    assert_eq!(state.offset(), 0);
+    assert_eq!(state.selected(), None);
+}
+
+#[test]
+fn usage_rebuild_caches_sorted_root_children_and_list_length() {
+    let root = PathBuf::from("/workspace");
+    let mut app = app(root.clone());
+    app.entries = vec![
+        ScanEntry {
+            path: root.join("small"),
+            kind: EntryKind::Directory,
+            size_bytes: 10,
+            modified_at: None,
+            rule_hits: vec![],
+        },
+        ScanEntry {
+            path: root.join("small/nested-but-larger"),
+            kind: EntryKind::File,
+            size_bytes: 999,
+            modified_at: None,
+            rule_hits: vec![],
+        },
+        ScanEntry {
+            path: root.join("large"),
+            kind: EntryKind::Directory,
+            size_bytes: 30,
+            modified_at: None,
+            rule_hits: vec![],
+        },
+        ScanEntry {
+            path: root.join("medium"),
+            kind: EntryKind::File,
+            size_bytes: 20,
+            modified_at: None,
+            rule_hits: vec![],
+        },
+    ];
+
+    app.rebuild_usage_order();
+    app.view = View::Usage;
+
+    assert_eq!(app.usage_order, vec![2, 3, 0]);
+    assert_eq!(app.usage_max_size, 30);
+    assert_eq!(app.list_len(), 3);
+}
+
+#[test]
 fn usage_renders_at_small_and_large_terminal_sizes() {
     let temp = tempfile::tempdir().expect("tempdir");
     fs::create_dir(temp.path().join("target")).expect("mkdir");
@@ -735,6 +839,24 @@ fn command_cursor_accounts_for_wide_chinese_input() {
         command_cursor_position(area, ":中文"),
         Some(Position::new(8, 20))
     );
+}
+
+#[test]
+fn command_input_view_keeps_long_and_wide_character_cursors_visible() {
+    let long_input = "/scan /a/very/long/path/that/ends/here";
+    let (long_view, long_cursor) = command_input_view(long_input, long_input.len(), 12);
+    assert!(long_view.starts_with('…'));
+    assert!(display_width(&long_view) <= 12);
+    assert_eq!(long_cursor, display_width(&long_view));
+
+    let wide_input = "/scan 项目/非常长的缓存目录/后缀";
+    let wide_cursor = wide_input.find("/后缀").expect("wide cursor boundary");
+    let (wide_view, wide_column) = command_input_view(wide_input, wide_cursor, 12);
+    assert!(wide_view.starts_with('…'));
+    assert!(wide_view.contains("缓存目录"));
+    assert!(display_width(&wide_view) <= 12);
+    assert!(wide_column < display_width(&wide_view));
+    assert!(wide_column < 12);
 }
 
 #[test]
@@ -1038,6 +1160,121 @@ fn command_mode_ctrl_w_deletes_word_and_ctrl_u_clears_line() {
 }
 
 #[test]
+fn command_editor_supports_middle_insertion_cursor_movement_and_delete() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    app.handle_key(key(KeyCode::Char('/')));
+    for ch in "scan".chars() {
+        app.handle_key(key(KeyCode::Char(ch)));
+    }
+
+    assert_eq!(app.input(), "/scan");
+    assert_eq!(app.input_cursor, app.input().len());
+
+    app.handle_key(key(KeyCode::Left));
+    assert_eq!(app.input_cursor, 4);
+    app.handle_key(key(KeyCode::Char('X')));
+    assert_eq!(app.input(), "/scaXn");
+
+    app.handle_key(key(KeyCode::Home));
+    assert_eq!(app.input_cursor, 1, "home must preserve the command prefix");
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.input_cursor, 2);
+    app.handle_key(key(KeyCode::Delete));
+    assert_eq!(app.input(), "/saXn");
+    assert_eq!(app.input_cursor, 2);
+
+    app.handle_key(key(KeyCode::End));
+    assert_eq!(app.input_cursor, app.input().len());
+    app.handle_key(key(KeyCode::Left));
+    app.handle_key(key(KeyCode::Right));
+    assert_eq!(app.input_cursor, app.input().len());
+}
+
+#[test]
+fn command_editor_backspace_respects_unicode_boundaries() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    app.handle_key(key(KeyCode::Char('/')));
+    for ch in "扫描🧹".chars() {
+        app.handle_key(key(KeyCode::Char(ch)));
+    }
+
+    app.handle_key(key(KeyCode::Backspace));
+    assert_eq!(app.input(), "/扫描");
+    assert!(app.input().is_char_boundary(app.input_cursor));
+
+    app.handle_key(key(KeyCode::Left));
+    app.handle_key(key(KeyCode::Backspace));
+    assert_eq!(app.input(), "/描");
+    assert_eq!(app.input_cursor, 1);
+}
+
+#[test]
+fn bracketed_paste_is_folded_into_one_safe_command_line() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    app.handle_key(key(KeyCode::Char('/')));
+
+    app.handle_paste("scan\t/tmp\r\n/next\u{7}  path");
+
+    assert_eq!(app.input(), "/scan /tmp /next path");
+    assert!(!app.input().chars().any(char::is_control));
+    assert!(matches!(app.mode, Mode::Command));
+    assert_eq!(app.input_cursor, app.input().len());
+}
+
+#[test]
+fn command_mode_ctrl_c_closes_before_ctrl_c_quits() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    app.handle_key(key(KeyCode::Char('/')));
+    app.handle_key(key(KeyCode::Char('s')));
+
+    app.handle_key(ctrl(KeyCode::Char('c')));
+
+    assert!(matches!(app.mode, Mode::Normal));
+    assert_eq!(app.input(), "");
+    assert!(!app.palette_open());
+    assert!(!app.should_quit);
+
+    app.handle_key(ctrl(KeyCode::Char('c')));
+    assert!(app.should_quit);
+}
+
+#[test]
+fn repeat_navigation_works_but_repeat_clean_and_quit_are_ignored() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut rules_app = app(temp.path().to_path_buf());
+    rules_app.dispatch(ActionRequest::Rules);
+    assert!(rules_app.list_len() >= 3);
+
+    rules_app.handle_key(repeat(KeyCode::Down));
+    rules_app.handle_key(repeat(KeyCode::Char('j')));
+    assert_eq!(rules_app.list_state.selected(), Some(2));
+    rules_app.handle_key(repeat(KeyCode::Char('q')));
+    assert!(!rules_app.should_quit);
+
+    let mut cleanup_app = app(temp.path().to_path_buf());
+    cleanup_app.config.cleanup.require_confirm = true;
+    cleanup_app.entries = vec![ScanEntry {
+        path: temp.path().join("old-cache"),
+        kind: EntryKind::Directory,
+        size_bytes: 1024,
+        modified_at: Some(cleanup_app.scan_as_of - chrono::Duration::days(100)),
+        rule_hits: vec![test_rule_hit("generated")],
+    }];
+    cleanup_app.build_plan();
+    assert!(cleanup_app.plan().expect("plan").summary.selected_count > 0);
+
+    cleanup_app.handle_key(repeat(KeyCode::Char('c')));
+    cleanup_app.handle_key(repeat(KeyCode::Char('q')));
+
+    assert!(!cleanup_app.clean_waiting_for_confirmation);
+    assert!(!cleanup_app.should_quit);
+}
+
+#[test]
 fn gg_goto_first_and_goto_last() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut app = app(temp.path().to_path_buf());
@@ -1052,6 +1289,21 @@ fn gg_goto_first_and_goto_last() {
 
     app.handle_key(key(KeyCode::Char('G')));
     assert_eq!(app.list_state.selected(), Some(app.list_len() - 1));
+}
+
+#[test]
+fn invalid_gg_second_key_is_processed_normally() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut app = app(temp.path().to_path_buf());
+    app.dispatch(ActionRequest::Rules);
+    assert_eq!(app.list_state.selected(), Some(0));
+
+    app.handle_key(key(KeyCode::Char('g')));
+    assert_eq!(app.pending_key, Some('g'));
+    app.handle_key(key(KeyCode::Char('j')));
+
+    assert_eq!(app.pending_key, None);
+    assert_eq!(app.list_state.selected(), Some(1));
 }
 
 #[test]

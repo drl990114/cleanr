@@ -6,26 +6,18 @@ pub(crate) fn render_usage(frame: &mut Frame<'_>, area: Rect, app: &mut Workbenc
         return;
     }
 
-    let entries = usage_entries(app);
-    let max_size = entries.iter().map(|e| e.size_bytes).max().unwrap_or(0);
+    let item_count = app.usage_order.len();
     let bar_width = usage_bar_width(area.width);
-
-    let items: Vec<ListItem<'static>> = if entries.is_empty() {
-        vec![ListItem::new(Line::from(vec![Span::styled(
-            app.i18n.t("status_no_scan_results"),
-            Style::default().fg(app.theme.fg_dim),
-        )]))]
-    } else {
-        entries
-            .iter()
-            .map(|entry| ListItem::new(usage_bar_line(entry, max_size, bar_width, app.theme)))
-            .collect()
-    };
 
     let details = app
         .list_state
         .selected()
-        .and_then(|idx| entries.get(idx))
+        .and_then(|index| {
+            app.usage_order
+                .get(index)
+                .and_then(|entry_index| app.entries.get(*entry_index))
+                .map(|entry| (index, entry))
+        })
         .map_or_else(
             || {
                 vec![
@@ -48,7 +40,7 @@ pub(crate) fn render_usage(frame: &mut Frame<'_>, area: Rect, app: &mut Workbenc
                     )]),
                 ]
             },
-            |entry| {
+            |(index, entry)| {
                 vec![
                     detail_line(
                         "Path",
@@ -70,7 +62,11 @@ pub(crate) fn render_usage(frame: &mut Frame<'_>, area: Rect, app: &mut Workbenc
                     ),
                     detail_line(
                         "Contained",
-                        usage_descendant_count(&app.entries, entry).to_string(),
+                        app.usage_descendant_counts
+                            .get(index)
+                            .copied()
+                            .unwrap_or(0)
+                            .to_string(),
                         app.theme.ok,
                         app.theme,
                     ),
@@ -145,38 +141,37 @@ pub(crate) fn render_usage(frame: &mut Frame<'_>, area: Rect, app: &mut Workbenc
         area.bottom()
             .saturating_sub(summary_area.y.saturating_add(summary_area.height)),
     );
-    app.viewport_height = render_context_workspace(
+    let empty_message = app.i18n.t("status_no_scan_results");
+    let entries = &app.entries;
+    let usage_order = &app.usage_order;
+    let max_size = app.usage_max_size;
+    let theme = app.theme;
+    app.viewport_height = render_context_workspace_virtualized(
         frame,
         content_area,
         &mut app.list_state,
-        app.theme,
+        theme,
         title,
-        items,
+        item_count,
+        move |window| {
+            if item_count == 0 {
+                return vec![ListItem::new(Line::from(vec![Span::styled(
+                    empty_message,
+                    Style::default().fg(theme.fg_dim),
+                )]))];
+            }
+            usage_order[window]
+                .iter()
+                .filter_map(|entry_index| entries.get(*entry_index))
+                .map(|entry| ListItem::new(usage_bar_line(entry, max_size, bar_width, theme)))
+                .collect()
+        },
         detail_title,
         details,
     );
 }
 
-pub(crate) fn usage_entries(app: &Workbench) -> Vec<&ScanEntry> {
-    let mut result = Vec::new();
-    for root in &app.roots {
-        let root_path = root.as_path();
-        let mut children: Vec<&ScanEntry> = app
-            .entries
-            .iter()
-            .filter(|e| e.path.parent() == Some(root_path))
-            .collect();
-        children.sort_by_key(|e| std::cmp::Reverse(e.size_bytes));
-        result.extend(children);
-    }
-    if result.is_empty() {
-        let mut all: Vec<&ScanEntry> = app.entries.iter().collect();
-        all.sort_by_key(|e| std::cmp::Reverse(e.size_bytes));
-        result.extend(all.into_iter().take(100));
-    }
-    result
-}
-
+#[cfg(test)]
 pub(crate) fn usage_descendant_count(entries: &[ScanEntry], parent: &ScanEntry) -> usize {
     if parent.kind != EntryKind::Directory {
         return 0;
@@ -197,10 +192,13 @@ pub(crate) fn usage_bar_line(
     let filled = if max_size == 0 {
         0
     } else {
-        ((entry.size_bytes as f64 / max_size as f64) * bar_width as f64).round() as usize
+        usize::try_from(
+            (u128::from(entry.size_bytes) * bar_width as u128).div_ceil(u128::from(max_size)),
+        )
+        .unwrap_or(bar_width)
+        .min(bar_width)
     };
     let empty = bar_width.saturating_sub(filled);
-    let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
     let name = entry
         .path
@@ -216,9 +214,10 @@ pub(crate) fn usage_bar_line(
 
     Line::from(vec![
         Span::styled(format!("{size_str:>10}"), Style::default().fg(theme.cyan)),
-        Span::raw(" ["),
-        Span::styled(bar, Style::default().fg(theme.accent)),
-        Span::raw("] "),
+        Span::raw("  "),
+        Span::styled("━".repeat(filled), Style::default().fg(theme.accent)),
+        Span::styled("─".repeat(empty), Style::default().fg(theme.border)),
+        Span::raw("  "),
         Span::styled(
             format!("{icon}{name}{suffix}"),
             Style::default().fg(theme.fg),

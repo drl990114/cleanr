@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     path::PathBuf,
     sync::{
         Arc,
@@ -11,9 +11,9 @@ use std::{
 use chrono::{DateTime, Utc};
 use cleanr_config::{Config, default_config_path, default_state_dir};
 use cleanr_core::{
-    AnalysisReport, CleanupPlan, RecommendationPolicy, RecommendationPolicyError, SafetyPolicy,
-    ScanEntry, ScanIssue, ScanRequest, ScanSummary, UserSelection,
-    build_analysis_report_with_safety_policy, build_cleanup_plan_from_analysis,
+    AnalysisReport, CandidateId, CleanupPlan, EntryKind, RecommendationPolicy,
+    RecommendationPolicyError, SafetyPolicy, ScanEntry, ScanIssue, ScanRequest, ScanSummary,
+    UserSelection, build_analysis_report_with_safety_policy, build_cleanup_plan_from_analysis,
 };
 use cleanr_fs::{
     NO_GLOBAL_SCAN_ROOTS, SCAN_CANCELLED, ScanOptions, ScanPhase, ScanProgress, resolve_scan_roots,
@@ -21,21 +21,25 @@ use cleanr_fs::{
 use cleanr_i18n::I18n;
 use cleanr_plugin_api::PluginDiagnostic;
 use cleanr_rules::RuleRegistry;
-use cleanr_tasks::{CleanupExecutor, TrashExecutor, restored_run_ids};
+#[cfg(test)]
+use cleanr_tasks::CleanupExecutor;
+use cleanr_tasks::restored_run_ids;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
 
+#[cfg(test)]
+use crate::effects::execute_cleanup;
 use crate::{
     commands::{
         ActionRequest, CleanupIntent, command_name_for_status, filtered_palette_commands,
         palette_command_invocation, parse_slash_command,
     },
     effects::{
-        TaskEvent, execute_cleanup, export_cleanup_plan, load_history, restore_cleanup,
-        save_config, spawn_scan,
+        OperationEvent, OperationKind, TaskEvent, export_cleanup_plan, load_history, save_config,
+        spawn_cleanup, spawn_restore, spawn_scan,
     },
     theme::Theme,
-    views::{format_bytes, usage_entries},
+    views::format_bytes,
 };
 
 // -------------------------------------------------------------------------
@@ -73,6 +77,9 @@ pub struct Workbench {
     pub(crate) theme: Theme,
     pub(crate) state_dir: PathBuf,
     pub(crate) input: String,
+    /// Byte offset of the command cursor. It is always kept on a UTF-8 boundary and never moves
+    /// before the command prefix.
+    pub(crate) input_cursor: usize,
     pub(crate) mode: Mode,
     pub(crate) view: View,
     pub(crate) palette_open: bool,
@@ -85,6 +92,7 @@ pub struct Workbench {
     /// One immutable report per completed scan. Candidate IDs remain stable while the user edits
     /// selection and rebuilds a plan.
     pub(crate) analysis: Option<AnalysisReport>,
+    pub(crate) candidate_ids_by_path: HashMap<PathBuf, CandidateId>,
     pub(crate) selection: UserSelection,
     pub(crate) plan: Option<CleanupPlan>,
     pub(crate) task_log: Vec<String>,
@@ -93,6 +101,13 @@ pub struct Workbench {
     pub(crate) scan_rx: Option<Receiver<TaskEvent>>,
     pub(crate) scan_cancel: Option<Arc<AtomicBool>>,
     pub(crate) scan_progress: Option<ScanProgress>,
+    pub(crate) operation_rx: Option<Receiver<OperationEvent>>,
+    pub(crate) operation_kind: Option<OperationKind>,
+    /// Stable, size-sorted indices used by the usage view. Keeping this outside the renderer
+    /// avoids sorting the full scan result on every frame and every navigation key.
+    pub(crate) usage_order: Vec<usize>,
+    pub(crate) usage_max_size: u64,
+    pub(crate) usage_descendant_counts: Vec<usize>,
     pub(crate) review_after_scan: bool,
     pub(crate) usage_after_scan: bool,
     pub(crate) clean_waiting_for_confirmation: bool,

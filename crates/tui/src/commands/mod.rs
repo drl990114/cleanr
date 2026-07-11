@@ -42,7 +42,15 @@ pub(crate) fn filtered_palette_commands(
     input: &str,
     i18n: &I18n,
 ) -> Vec<CommandInfo> {
-    let filter = input.strip_prefix('/').unwrap_or("").trim().to_lowercase();
+    // Arguments should not make the command list disappear. Only the command token drives
+    // palette filtering; the full line is still parsed when submitted.
+    let filter = input
+        .strip_prefix('/')
+        .unwrap_or("")
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
     command_palette(has_scan_results)
         .into_iter()
         .filter(|command| {

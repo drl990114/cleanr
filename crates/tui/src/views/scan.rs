@@ -61,7 +61,7 @@ pub(crate) fn render_scan_progress(
         Span::styled(
             format!("{} ", spinner_frame(app.animation_tick)),
             Style::default()
-                .fg(app.theme.warn)
+                .fg(app.theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -259,10 +259,24 @@ pub(crate) fn render_candidates(
     app: &mut Workbench,
     wide: bool,
 ) {
-    let content_width = candidate_content_width(area, wide);
-    let items: Vec<ListItem> = if let Some(plan) = &app.plan {
+    let item_count = app.plan.as_ref().map_or_else(
+        || {
+            app.entries
+                .iter()
+                .filter(|entry| !entry.rule_hits.is_empty())
+                .count()
+        },
+        |plan| plan.items.len(),
+    );
+    let viewport_height = area.height.saturating_sub(1).max(1) as usize;
+    let window = visible_list_window(&mut app.list_state, item_count, viewport_height);
+    let has_scrollbar = item_count > viewport_height;
+    let content_width = candidate_content_width(area, wide, has_scrollbar);
+    let items: Vec<ListItem<'static>> = if let Some(plan) = &app.plan {
         plan.items
             .iter()
+            .skip(window.start)
+            .take(window.len())
             .map(|item| {
                 ListItem::new(plan_candidate_line(
                     item,
@@ -276,6 +290,8 @@ pub(crate) fn render_candidates(
         app.entries
             .iter()
             .filter(|entry| !entry.rule_hits.is_empty())
+            .skip(window.start)
+            .take(window.len())
             .map(|entry| {
                 ListItem::new(scan_candidate_line(
                     entry,
@@ -286,39 +302,50 @@ pub(crate) fn render_candidates(
             })
             .collect()
     };
+    let mut local_state = local_list_state(&app.list_state, &window);
+
+    let mut list_block = Block::default()
+        .borders(if wide {
+            Borders::TOP | Borders::RIGHT
+        } else {
+            Borders::TOP
+        })
+        .border_style(Style::default().fg(app.theme.border))
+        .title(format!(" {} ", app.i18n.t("label_scan_tree")))
+        .title_style(
+            Style::default()
+                .fg(app.theme.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    if has_scrollbar && !wide {
+        list_block = list_block.padding(Padding::new(0, 1, 0, 0));
+    }
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(if wide {
-                    Borders::TOP | Borders::RIGHT
-                } else {
-                    Borders::TOP
-                })
-                .border_style(Style::default().fg(app.theme.border))
-                .title(format!(" {} ", app.i18n.t("label_scan_tree")))
-                .title_style(
-                    Style::default()
-                        .fg(app.theme.accent)
-                        .add_modifier(Modifier::BOLD),
-                ),
-        )
+        .block(list_block)
         .highlight_style(
             Style::default()
-                .bg(app.theme.highlight_bg)
-                .fg(app.theme.highlight_fg),
+                .fg(app.theme.highlight_fg)
+                .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("› ");
 
-    frame.render_stateful_widget(list, area, &mut app.list_state);
+    frame.render_stateful_widget(list, area, &mut local_state);
+    render_list_scrollbar(
+        frame,
+        area,
+        item_count,
+        viewport_height,
+        app.list_state.selected().unwrap_or(window.start),
+        app.theme,
+    );
 }
 
-fn candidate_content_width(area: Rect, wide: bool) -> usize {
-    let right_border = if wide { 1 } else { 0 };
-    area.width
-        .saturating_sub(right_border)
-        .saturating_sub(2)
-        .into()
+fn candidate_content_width(area: Rect, wide: bool, has_scrollbar: bool) -> usize {
+    let right_border: u16 = if wide { 1 } else { 0 };
+    let scrollbar_gutter = if has_scrollbar && !wide { 1 } else { 0 };
+    usize::from(area.width.saturating_sub(right_border).saturating_sub(2))
+        .saturating_sub(scrollbar_gutter)
 }
 
 fn plan_candidate_line(
@@ -335,8 +362,17 @@ fn plan_candidate_line(
     };
     let size_text = size_cell(item.size_bytes);
     let icon_text = kind_icon(item.kind);
-    let label_text = format!("  · {}", item.category);
-    let confidence_text = format!(" {}", confidence_label(item.confidence));
+    let show_metadata = content_width >= 56;
+    let label_text = if show_metadata {
+        format!("  · {}", item.category)
+    } else {
+        String::new()
+    };
+    let confidence_text = if show_metadata {
+        format!(" {}", confidence_label(item.confidence))
+    } else {
+        String::new()
+    };
     let fixed_width = display_width(check_text)
         + 1
         + display_width(&size_text)
@@ -368,8 +404,17 @@ fn scan_candidate_line(
     let hit = &entry.rule_hits[0];
     let size_text = size_cell(entry.size_bytes);
     let icon_text = kind_icon(entry.kind);
-    let label_text = format!("  · {}", hit.label);
-    let confidence_text = format!(" {}", confidence_label(hit.confidence));
+    let show_metadata = content_width >= 56;
+    let label_text = if show_metadata {
+        format!("  · {}", hit.label)
+    } else {
+        String::new()
+    };
+    let confidence_text = if show_metadata {
+        format!(" {}", confidence_label(hit.confidence))
+    } else {
+        String::new()
+    };
     let fixed_width = 2
         + display_width(&size_text)
         + display_width(icon_text)

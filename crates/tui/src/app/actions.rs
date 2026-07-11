@@ -6,10 +6,7 @@ impl Workbench {
             ActionRequest::Scan(request) => self.start_scan(request),
             ActionRequest::Review => self.review(),
             ActionRequest::Plan => self.build_plan(),
-            ActionRequest::Clean { intent } => {
-                let executor = TrashExecutor;
-                self.clean_with_executor(intent, &executor);
-            }
+            ActionRequest::Clean { intent } => self.request_cleanup(intent),
             ActionRequest::Restore => self.show_restore(),
             ActionRequest::Rules => self.show_rules(),
             ActionRequest::Plugins => self.show_plugins(),
@@ -18,10 +15,67 @@ impl Workbench {
             ActionRequest::Usage(request) => self.start_usage_scan(request),
             ActionRequest::ExportPlan(path) => self.export_plan(path),
             ActionRequest::Help => self.show_help(),
-            ActionRequest::Quit => self.should_quit = true,
+            ActionRequest::Quit => {
+                if self.is_operation_running() {
+                    self.status = self.i18n.t("status_operation_running");
+                } else {
+                    self.should_quit = true;
+                }
+            }
         }
     }
 
+    /// Validate and authorize cleanup on the UI thread, then move the filesystem work to a
+    /// background worker. The generic synchronous variant below remains available for deterministic
+    /// executor tests.
+    pub(crate) fn request_cleanup(&mut self, intent: CleanupIntent) {
+        if self.is_operation_running() {
+            self.status = self.i18n.t("status_operation_running");
+            return;
+        }
+        if self.plan.is_none() {
+            self.build_plan();
+        }
+        let Some(plan) = &self.plan else {
+            return;
+        };
+        if plan.summary.selected_count == 0 {
+            self.status = self.i18n.t("status_no_selected_items");
+            return;
+        }
+        let confirmed = intent == CleanupIntent::ExplicitUserConfirmation
+            || (intent == CleanupIntent::UserRequest && !plan.safety.requires_confirmation);
+        if plan.safety.requires_confirmation && !confirmed {
+            self.clean_waiting_for_confirmation = true;
+            self.restore_waiting_for_confirmation = None;
+            self.confirm_choice = ConfirmChoice::No;
+            self.status = self.i18n.format(
+                "status_clean_confirm",
+                &[
+                    ("count", plan.summary.selected_count.to_string()),
+                    ("size", format_bytes(plan.summary.selected_size_bytes)),
+                ],
+            );
+            return;
+        }
+
+        let count = plan.summary.selected_count;
+        let size = format_bytes(plan.summary.selected_size_bytes);
+        match spawn_cleanup(plan.clone(), self.state_dir.clone()) {
+            Ok(effect) => {
+                self.clean_waiting_for_confirmation = false;
+                self.operation_kind = Some(effect.kind);
+                self.operation_rx = Some(effect.receiver);
+                self.status = self.i18n.format(
+                    "status_cleaning",
+                    &[("count", count.to_string()), ("size", size)],
+                );
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn clean_with_executor(
         &mut self,
         intent: CleanupIntent,
@@ -113,6 +167,10 @@ impl Workbench {
     }
 
     pub(crate) fn request_restore_selected(&mut self) {
+        if self.is_operation_running() {
+            self.status = self.i18n.t("status_operation_running");
+            return;
+        }
         let idx = self.list_state.selected().unwrap_or(0);
         let Some(manifest) = self.execution_manifests.get(idx) else {
             self.status = self.i18n.t("status_no_manifests");
@@ -136,6 +194,10 @@ impl Workbench {
     }
 
     pub(crate) fn restore_run(&mut self, run_id: &str) {
+        if self.is_operation_running() {
+            self.status = self.i18n.t("status_operation_running");
+            return;
+        }
         let Some(manifest) = self
             .execution_manifests
             .iter()
@@ -145,22 +207,15 @@ impl Workbench {
             self.status = "cleanup run manifest was not found".to_string();
             return;
         };
-        match restore_cleanup(&manifest, &self.state_dir) {
-            Ok(restored) => {
-                self.status = self.i18n.format(
-                    "status_restored",
-                    &[
-                        ("succeeded", restored.summary.succeeded.to_string()),
-                        ("failed", restored.summary.failed.to_string()),
-                        ("restore_id", restored.restore_id.clone()),
-                    ],
-                );
-                self.task_log
-                    .push(format!("restore {}", restored.summary.succeeded));
-                self.refresh_history();
-                self.refresh_roots_after_mutation();
+        match spawn_restore(manifest, self.state_dir.clone()) {
+            Ok(effect) => {
+                self.operation_kind = Some(effect.kind);
+                self.operation_rx = Some(effect.receiver);
+                self.status = self
+                    .i18n
+                    .format("status_restoring", &[("run_id", run_id.to_string())]);
             }
-            Err(err) => self.status = err.to_string(),
+            Err(error) => self.status = error.to_string(),
         }
     }
 
@@ -195,6 +250,11 @@ impl Workbench {
             RecommendationPolicy::new(self.config.recommendations.preselect_after_days)?,
             &safety,
         )?;
+        self.candidate_ids_by_path = analysis
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.local_path.clone(), candidate.id.clone()))
+            .collect();
         self.selection = UserSelection::from_recommendations(&analysis);
         self.analysis = Some(analysis);
         Ok(())
@@ -351,6 +411,9 @@ impl Workbench {
     }
 
     pub(crate) fn show_usage(&mut self) {
+        if self.usage_order.is_empty() && !self.entries.is_empty() {
+            self.rebuild_usage_order();
+        }
         self.view = View::Usage;
         let candidates = self.plan.as_ref().map_or_else(
             || {
