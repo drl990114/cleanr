@@ -1,10 +1,52 @@
-# Cleanr
-
-面向开发者缓存、以证据为先的可审阅本地磁盘清理工具。
-
-[English](../en/README.md) | [仓库 README](../../README.md) | [完整文档](../../docs/) | [贡献指南](../../CONTRIBUTING.md)
+<div align="center">
+  <h1>Cleanr</h1>
+  <p><strong>让你的 AI 借助 Cleanr，安全地清理磁盘。</strong></p>
+  <p>
+    <a href="https://drl990114.github.io/cleanr/zh-Hans/">完整文档</a>
+    ·
+    <a href="https://github.com/drl990114/cleanr/releases">下载</a>
+    ·
+    <a href="https://github.com/drl990114/cleanr/discussions">讨论区</a>
+  </p>
+  <p>
+    <a href="https://github.com/drl990114/cleanr/actions/workflows/ci.yml"><img alt="CI 工作流" src="https://img.shields.io/github/actions/workflow/status/drl990114/cleanr/ci.yml?branch=main&label=CI&style=flat-square&logo=githubactions&logoColor=white"></a>
+    <a href="https://github.com/drl990114/cleanr/actions/workflows/release.yml"><img alt="发布工作流" src="https://img.shields.io/github/actions/workflow/status/drl990114/cleanr/release.yml?label=release&style=flat-square&logo=githubactions&logoColor=white"></a>
+    <a href="https://github.com/drl990114/cleanr/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/drl990114/cleanr?style=flat-square&color=0f766e"></a>
+    <a href="https://www.npmjs.com/package/cleanr-cli"><img alt="npm 版本" src="https://img.shields.io/npm/v/cleanr-cli?style=flat-square&logo=npm"></a>
+  </p>
+  <p>
+    <img alt="Rust" src="https://img.shields.io/badge/Rust-1.94-000000?style=flat-square&logo=rust&logoColor=white">
+    <img alt="Ratatui" src="https://img.shields.io/badge/Ratatui-0.29-2563eb?style=flat-square">
+    <img alt="支持 macOS、Linux 和 Windows" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-475569?style=flat-square">
+    <img alt="开源项目" src="https://img.shields.io/badge/open%20source-MIT-155eef?style=flat-square">
+  </p>
+  <p>
+    <a href="../en/README.md">English</a>
+    ·
+    <a href="../../README.md">仓库 README</a>
+    ·
+    <a href="../../CONTRIBUTING.md">贡献指南</a>
+  </p>
+</div>
 
 Cleanr 帮助开发者发现可重建的生成文件和缓存，避免把磁盘清理变成盲删。它会扫描你选择的路径，说明每个候选项的匹配原因，让你在键盘驱动的终端界面里审阅清理计划，并把选中的项目移动到系统废纸篓。
+
+## 为 AI 而设计
+
+Cleanr 通过 `cleanr analyze` 向本地编码 Agent 提供确定、带版本的 JSON 证据，同时把
+清理权限留给用户。Agent 无需解析终端输出，也无需获得文件删除权限，就能检查推荐
+状态、决策代码、风险提示和扫描完整性。除非你主动选择分享，否则原始路径和报告始终
+留在本机。
+
+直接从 GitHub 安装跨 Agent Skill `cleanr-review-disk-cleanup`：
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+Skill 会检查 Cleanr CLI 是否可用，在缺失时全局安装 `cleanr-cli`，并指导 Agent 完成
+本地只读分析。支持的 Agent、报告契约和隐私说明请见
+[证据与隐私](../../docs/i18n/zh-Hans/docusaurus-plugin-content-docs/current/evidence-and-privacy.md)。
 
 ## 特性
 
@@ -65,15 +107,6 @@ TUI 中审阅并确认。
 
 TUI、`analyze`、`plan` 和 `dry-run` 共用 `cleanr.toml` 中的
 `[recommendations].preselect_after_days`（默认 90 天；设为 `0` 会关闭年龄门槛）。
-
-可直接从 GitHub 安装仓库中的跨 Agent Skill `cleanr-review-disk-cleanup`：
-
-```bash
-npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
-```
-
-它只指导本地只读分析，没有清理权限。支持的 Agent 选择方式和用法请见
-[证据与隐私](../../docs/i18n/zh-Hans/docusaurus-plugin-content-docs/current/evidence-and-privacy.md)。
 
 ## 安全模型
 

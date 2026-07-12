@@ -1,13 +1,57 @@
-# Cleanr
-
-Evidence-first, reviewable disk cleanup for rebuildable caches and system cleanup locations.
-
-[English](readme/en/README.md) | [Simplified Chinese](readme/zh-CN/README.md) | [Documentation](docs/) | [Contributing](CONTRIBUTING.md)
+<div align="center">
+  <h1>Cleanr</h1>
+  <p><strong>Let your AI help you safely clean your disk with Cleanr.</strong></p>
+  <p>
+    <a href="https://drl990114.github.io/cleanr/">Documentation</a>
+    ·
+    <a href="https://github.com/drl990114/cleanr/releases">Download</a>
+    ·
+    <a href="https://github.com/drl990114/cleanr/discussions">Discussions</a>
+  </p>
+  <p>
+    <a href="https://github.com/drl990114/cleanr/actions/workflows/ci.yml"><img alt="CI workflow" src="https://img.shields.io/github/actions/workflow/status/drl990114/cleanr/ci.yml?branch=main&label=CI&style=flat-square&logo=githubactions&logoColor=white"></a>
+    <a href="https://github.com/drl990114/cleanr/actions/workflows/release.yml"><img alt="Release workflow" src="https://img.shields.io/github/actions/workflow/status/drl990114/cleanr/release.yml?label=release&style=flat-square&logo=githubactions&logoColor=white"></a>
+    <a href="https://github.com/drl990114/cleanr/blob/main/LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/drl990114/cleanr?style=flat-square&color=0f766e"></a>
+    <a href="https://www.npmjs.com/package/cleanr-cli"><img alt="npm version" src="https://img.shields.io/npm/v/cleanr-cli?style=flat-square&logo=npm"></a>
+  </p>
+  <p>
+    <img alt="Rust" src="https://img.shields.io/badge/Rust-1.94-000000?style=flat-square&logo=rust&logoColor=white">
+    <img alt="Ratatui" src="https://img.shields.io/badge/Ratatui-0.29-2563eb?style=flat-square">
+    <img alt="Platforms: macOS, Linux, and Windows" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-475569?style=flat-square">
+    <img alt="Open source" src="https://img.shields.io/badge/open%20source-MIT-155eef?style=flat-square">
+  </p>
+  <p>
+    <a href="readme/en/README.md">English</a>
+    ·
+    <a href="readme/zh-CN/README.md">简体中文</a>
+    ·
+    <a href="CONTRIBUTING.md">Contributing</a>
+  </p>
+</div>
 
 Cleanr helps developers find rebuildable generated files and caches without
 turning cleanup into a blind delete. It scans paths you choose, explains why
 each item matched, lets you review the plan in a keyboard-driven terminal UI,
 and moves selected items to the operating system trash.
+
+## AI-Friendly by Design
+
+Cleanr gives local coding agents deterministic, versioned JSON evidence through
+`cleanr analyze` while keeping cleanup authority with the user. Agents can
+inspect recommendation states, decision codes, risk notes, and scan integrity
+without parsing terminal output or deleting files. Raw paths and reports stay
+local unless you explicitly choose to share them.
+
+Install the cross-agent `cleanr-review-disk-cleanup` skill directly from GitHub:
+
+```bash
+npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
+```
+
+The skill checks whether the Cleanr CLI is available, installs `cleanr-cli`
+globally when needed, and guides a local, read-only analysis workflow. See
+[Evidence and privacy](docs/docs/evidence-and-privacy.md) for supported agents,
+the report contract, and privacy guidance.
 
 ## Features
 
@@ -82,17 +126,6 @@ inside the TUI.
 The TUI, `analyze`, `plan`, and `dry-run` share
 `[recommendations].preselect_after_days` from `cleanr.toml` (90 days by
 default; `0` disables the age gate).
-
-Install the repository's cross-agent `cleanr-review-disk-cleanup` skill directly
-from GitHub:
-
-```bash
-npx skills add drl990114/cleanr@cleanr-review-disk-cleanup -g
-```
-
-It guides local, read-only analysis and has no cleanup authority. See
-[Evidence and privacy](docs/docs/evidence-and-privacy.md) for supported-agent
-selection and usage.
 
 ## Safety Model
 

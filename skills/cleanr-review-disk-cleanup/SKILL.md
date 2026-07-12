@@ -1,11 +1,39 @@
 ---
 name: cleanr-review-disk-cleanup
-description: "Review local disk-cleanup evidence with Cleanr and prepare human-controlled cleanup decisions. Use when an agent needs to inspect storage candidates, run `cleanr analyze`, interpret an `AnalysisReport`, explain recommendation states or decision codes, configure the age policy, inspect plans, or guide restore review. Keep review local and non-destructive; never authorize or execute cleanup or send raw paths remotely."
+description: "Use the AI-friendly Cleanr CLI to review local disk-cleanup evidence and prepare human-controlled cleanup decisions. Use when an agent needs to install or invoke Cleanr, inspect storage candidates, run `cleanr analyze`, interpret its structured `AnalysisReport`, explain recommendation states or decision codes, configure the age policy, inspect plans, or guide restore review. Keep review local and non-destructive; never authorize or execute cleanup or send raw paths remotely."
 ---
 
 # Review Disk Cleanup with Cleanr
 
 Use Cleanr as an evidence source for a human-controlled local cleanup workflow.
+
+## Ensure Cleanr is available
+
+Check for Cleanr before analyzing:
+
+```bash
+command -v cleanr
+```
+
+If it is unavailable, tell the user that the required CLI is being installed globally, then prefer the cross-platform npm package:
+
+```bash
+npm install --global cleanr-cli
+```
+
+If npm is unavailable but Cargo is installed, use:
+
+```bash
+cargo install cleanr-cli
+```
+
+Verify the installation before continuing:
+
+```bash
+cleanr --version
+```
+
+Do not reinstall or upgrade an existing Cleanr installation unless the user asks. If neither package manager is available or installation fails, report the blocker and link to `https://github.com/drl990114/cleanr/releases` instead of improvising an installer.
 
 ## Safety boundary
 
