@@ -1,8 +1,14 @@
 id = "builtin-dev"
 name = "Built-in developer caches"
 version = "0.10.0"
-description = "High-confidence generated dependency and build caches for developer projects."
+description = "Generated dependencies, build artifacts, and review-required data for developer projects."
 categories = ["developer-cache", "build-cache", "package-cache"]
+
+# Cross-stack project artifact paths were audited against the MIT-licensed
+# https://github.com/tbillington/kondo source at commit
+# 1d351ca80b3d3adfad9bbe7db872c27359190210. Confidence, selection, and risk
+# semantics below are Cleanr-specific; intentionally created `.venv` directories
+# are excluded.
 
 [[rules]]
 id = "node-modules"
@@ -16,15 +22,92 @@ reason = "node_modules is a generated dependency directory that package managers
 risk_note = "Project dependencies will need to be reinstalled before the project can run again."
 
 [[rules]]
+id = "node-angular-cache"
+label = "Angular project cache"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["package.json"], excluded_root_dir_globs = ["ios", "android"], artifact_paths = [".angular"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .angular directory contains generated Angular tooling and build cache data."
+risk_note = "The next Angular build or development-server start may take longer."
+
+[[rules]]
+id = "react-native-android-build-cache"
+label = "React Native Android build data"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["package.json"], root_dir_globs = ["ios", "android"], artifact_paths = ["android/build", "android/.gradle"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated Gradle build outputs and project-local cache data."
+risk_note = "The next Gradle build may require network access and take longer."
+
+[[rules]]
+id = "react-native-ios-build-cache"
+label = "React Native iOS build data"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["package.json"], root_dir_globs = ["ios", "android"], artifact_paths = ["ios/build", "ios/DerivedData"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated iOS build products and derived data."
+risk_note = "The next iOS build and indexing pass may take longer."
+
+[[rules]]
+id = "react-native-metro-cache"
+label = "React Native Metro cache"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["package.json"], root_dir_globs = ["ios", "android"], artifact_paths = [".metro"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .metro directory contains generated React Native bundler cache data."
+risk_note = "Metro will reprocess project modules before cached results are available again."
+
+[[rules]]
+id = "react-native-expo-state"
+label = "Expo local project state"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["package.json"], root_dir_globs = ["ios", "android"], artifact_paths = [".expo"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The .expo directory contains generated, machine-local project state."
+risk_note = "Review before deleting because local device and development-server state will be reset."
+
+[[rules]]
+id = "react-native-pods"
+label = "React Native CocoaPods dependencies"
+category = "package-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["package.json"], root_dir_globs = ["ios", "android"], artifact_paths = ["ios/Pods"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The Pods directory contains installed project dependencies."
+risk_note = "Dependencies must be installed again and may require network access, credentials, or package sources that are no longer available."
+
+[[rules]]
 id = "rust-target"
 label = "Rust target directory"
 category = "build-cache"
-match = { dir_name = "target", min_size = 1048576 }
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Cargo.toml"], artifact_paths = ["target"] } }
 confidence = "high"
 default_selected = true
 action = "trash"
 reason = "Rust target directories contain generated build artifacts."
 risk_note = "The next cargo build may take longer."
+
+[[rules]]
+id = "cargo-xwin-cache"
+label = "Cargo xwin toolchain cache"
+category = "package-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Cargo.toml"], artifact_paths = [".xwin-cache"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The .xwin-cache directory contains downloaded cross-compilation toolchain data."
+risk_note = "Rebuilding may require a large download, network access, and additional setup time."
 
 [[rules]]
 id = "python-pycache"
@@ -80,6 +163,380 @@ default_selected = false
 action = "trash"
 reason = "tox environments are generated, but deleting them may remove expensive local environments."
 risk_note = "Review before deleting; environments may take time or network access to rebuild."
+
+[[rules]]
+id = "python-nox-environments"
+label = "nox environments"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.py"], artifact_paths = [".nox"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "nox environments are generated from project session configuration."
+risk_note = "Review before deleting because recreating environments may require network access and significant setup time."
+
+[[rules]]
+id = "python-local-packages"
+label = "Python local package environment"
+category = "package-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.py"], artifact_paths = ["__pypackages__"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The __pypackages__ directory contains locally installed project dependencies."
+risk_note = "Dependencies must be installed again and may require network access or unavailable package sources."
+
+[[rules]]
+id = "unity-generated-cache"
+label = "Unity generated project caches"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Assembly-CSharp.csproj"], artifact_paths = ["Library", "Temp", "Obj"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated imports, intermediate files, and build cache data."
+risk_note = "The editor will regenerate the data, which can make the next project open or build substantially slower."
+
+[[rules]]
+id = "unity-logs"
+label = "Unity project logs"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Assembly-CSharp.csproj"], artifact_paths = ["Logs"] } }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "The Logs directory contains diagnostic output produced while developing the project."
+risk_note = "Deleting it removes diagnostic history that may still be needed to investigate failures."
+
+[[rules]]
+id = "unity-memory-captures"
+label = "Unity memory captures"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Assembly-CSharp.csproj"], artifact_paths = ["MemoryCaptures"] } }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "Memory captures are large, intentionally recorded diagnostic artifacts."
+risk_note = "Captures may be irreplaceable and can contain sensitive application data; inspect them before deleting."
+
+[[rules]]
+id = "unity-build-output"
+label = "Unity build outputs"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Assembly-CSharp.csproj"], artifact_paths = ["Build", "Builds"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "Build and Builds directories commonly contain generated player outputs."
+risk_note = "Review before deleting because these may be retained release artifacts that are expensive or impossible to reproduce exactly."
+
+[[rules]]
+id = "haskell-stack-work"
+label = "Haskell Stack build directory"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["stack.yaml"], artifact_paths = [".stack-work"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .stack-work directory contains generated Stack build artifacts."
+risk_note = "The next Stack build may take longer and may need to fetch dependencies."
+
+[[rules]]
+id = "haskell-cabal-dist"
+label = "Cabal build directory"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["cabal.project"], artifact_paths = ["dist-newstyle"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The dist-newstyle directory contains generated Cabal build artifacts."
+risk_note = "The next Cabal build may take longer and may need to fetch dependencies."
+
+[[rules]]
+id = "sbt-target"
+label = "sbt target directories"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["build.sbt"], artifact_paths = ["target", "project/target"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These target directories contain generated Scala build artifacts and metadata."
+risk_note = "The next sbt build may take longer."
+
+[[rules]]
+id = "maven-target"
+label = "Maven target directory"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["pom.xml"], artifact_paths = ["target"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The target directory contains generated Maven build artifacts."
+risk_note = "The next Maven build may take longer."
+
+[[rules]]
+id = "gradle-project-artifacts"
+label = "Gradle project build data"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["build.gradle", "build.gradle.kts"], artifact_paths = ["build", ".gradle"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated Gradle build outputs and project-local cache data."
+risk_note = "The next Gradle build may require network access and take longer."
+
+[[rules]]
+id = "cmake-build-output"
+label = "CMake build directories"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["CMakeLists.txt"], artifact_paths = ["build", "cmake-build-debug", "cmake-build-release"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated CMake configuration and compiler outputs."
+risk_note = "The project must be configured and compiled again."
+
+[[rules]]
+id = "unreal-generated-cache"
+label = "Unreal generated project caches"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.uproject"], artifact_paths = ["DerivedDataCache", "Intermediate"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain derived asset data and generated build intermediates."
+risk_note = "Shaders, assets, and project files may need expensive regeneration on the next open or build."
+
+[[rules]]
+id = "unreal-binaries"
+label = "Unreal project binaries"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.uproject"], artifact_paths = ["Binaries"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The Binaries directory commonly contains compiled project outputs."
+risk_note = "Review before deleting because rebuilding can be expensive and the directory may contain retained deliverables."
+
+[[rules]]
+id = "unreal-build-data"
+label = "Unreal project build data"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.uproject"], artifact_paths = ["Build"] } }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "The Build directory can contain platform-specific build resources and generated packaging data."
+risk_note = "Do not delete without inspection because some files may be required inputs rather than reproducible cache data."
+
+[[rules]]
+id = "unreal-saved-data"
+label = "Unreal project saved data"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.uproject"], artifact_paths = ["Saved"] } }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "The Saved directory contains engine-managed autosaves, configuration, logs, and crash data."
+risk_note = "Deleting it can remove recovery data and project-local settings; inspect its contents first."
+
+[[rules]]
+id = "jupyter-checkpoints"
+label = "Jupyter notebook checkpoints"
+category = "developer-cache"
+match = { kind = "directory", project = { marker_globs = ["*.ipynb"], artifact_paths = [".ipynb_checkpoints"] } }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "Notebook checkpoint directories hold automatically created recovery copies."
+risk_note = "Deleting checkpoints removes rollback and recovery options for notebook content."
+
+[[rules]]
+id = "pixi-environment"
+label = "Pixi project environment"
+category = "package-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["pixi.toml"], artifact_paths = [".pixi"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The .pixi directory contains an installed, project-local environment."
+risk_note = "Recreating the environment may require large downloads, network access, credentials, and significant time."
+
+[[rules]]
+id = "composer-vendor"
+label = "Composer dependency directory"
+category = "package-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["composer.json"], artifact_paths = ["vendor"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The vendor directory contains installed project dependencies."
+risk_note = "Dependencies must be installed again and may include local modifications or packages that are no longer available."
+
+[[rules]]
+id = "dart-tooling-cache"
+label = "Dart and Flutter tooling data"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["pubspec.yaml"], artifact_paths = [".dart_tool", "linux/flutter/ephemeral", "windows/flutter/ephemeral"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated package configuration and platform tooling data."
+risk_note = "Tooling will regenerate the data and the next dependency resolution or build may take longer."
+
+[[rules]]
+id = "dart-build-output"
+label = "Dart and Flutter build output"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["pubspec.yaml"], artifact_paths = ["build"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The build directory commonly contains generated application and package outputs."
+risk_note = "Review before deleting because retained distributable artifacts may be expensive to reproduce exactly."
+
+[[rules]]
+id = "elixir-build-cache"
+label = "Elixir build directory"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["mix.exs"], artifact_paths = ["_build"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The _build directory contains generated Mix build artifacts."
+risk_note = "The next Mix build may take longer."
+
+[[rules]]
+id = "elixir-language-server-cache"
+label = "Elixir language-server caches"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["mix.exs"], artifact_paths = [".elixir_ls", ".lexical"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated language-server indexes and build data."
+risk_note = "Editor intelligence may be unavailable or slower until the indexes are rebuilt."
+
+[[rules]]
+id = "elixir-tools"
+label = "Elixir project tools"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["mix.exs"], artifact_paths = [".elixir-tools"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The .elixir-tools directory contains project-local editor tooling artifacts."
+risk_note = "Recreating installed tools may require downloads, credentials, and additional setup time."
+
+[[rules]]
+id = "swift-build-cache"
+label = "Swift package build directory"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Package.swift"], artifact_paths = [".build"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .build directory contains generated Swift package build products and checkouts."
+risk_note = "The next package build may require dependency downloads and take longer."
+
+[[rules]]
+id = "swiftpm-state"
+label = "Swift package-manager state"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Package.swift"], artifact_paths = [".swiftpm"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The .swiftpm directory contains package-manager and IDE workspace state."
+risk_note = "Review before deleting because local workspace configuration may be reset."
+
+[[rules]]
+id = "zig-cache"
+label = "Zig build caches"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["build.zig"], artifact_paths = ["zig-cache", ".zig-cache"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "These directories contain generated Zig compilation cache data."
+risk_note = "The next Zig build may take longer."
+
+[[rules]]
+id = "zig-output"
+label = "Zig install output"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["build.zig"], artifact_paths = ["zig-out"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The zig-out directory contains generated install and build outputs."
+risk_note = "Review before deleting because retained binaries or distributable artifacts must be rebuilt."
+
+[[rules]]
+id = "godot-import-cache"
+label = "Godot imported asset cache"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["project.godot"], artifact_paths = [".godot"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .godot directory contains generated imports and editor cache data."
+risk_note = "The editor will reimport assets and rebuild cache data, which may take substantial time."
+
+[[rules]]
+id = "dotnet-intermediate-output"
+label = ".NET intermediate output"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.csproj", "*.fsproj"], excluded_marker_globs = ["project.godot", "Assembly-CSharp.csproj"], artifact_paths = ["obj"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The obj directory contains generated compiler intermediates and restore metadata."
+risk_note = "The next restore or build may take longer."
+
+[[rules]]
+id = "dotnet-binary-output"
+label = ".NET binary output"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["*.csproj", "*.fsproj"], excluded_marker_globs = ["project.godot", "Assembly-CSharp.csproj"], artifact_paths = ["bin"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The bin directory commonly contains generated compiled outputs."
+risk_note = "Review before deleting because retained binaries and distributable artifacts must be rebuilt."
+
+[[rules]]
+id = "turborepo-cache"
+label = "Turborepo cache"
+category = "build-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["turbo.json"], artifact_paths = [".turbo"] } }
+confidence = "high"
+default_selected = true
+action = "trash"
+reason = "The .turbo directory contains generated task outputs, logs, and cache metadata."
+risk_note = "Tasks will run again instead of using cached results."
+
+[[rules]]
+id = "terraform-working-data"
+label = "Terraform working-directory data"
+category = "developer-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = [".terraform.lock.hcl"], artifact_paths = [".terraform"] } }
+confidence = "low"
+default_selected = false
+action = "trash"
+reason = "The .terraform directory mixes downloaded providers and modules with workspace and backend metadata."
+risk_note = "Deleting it resets initialization state and may remove sensitive backend settings; inspect it and preserve state files before proceeding."
+
+[[rules]]
+id = "cocoapods-dependencies"
+label = "CocoaPods dependency directory"
+category = "package-cache"
+match = { kind = "directory", min_size = 1048576, project = { marker_globs = ["Podfile"], artifact_paths = ["Pods"] } }
+confidence = "medium"
+default_selected = false
+action = "trash"
+reason = "The Pods directory contains installed project dependencies."
+risk_note = "Dependencies must be installed again and may require network access, credentials, or package sources that are no longer available."
 
 [[rules]]
 id = "next-cache"

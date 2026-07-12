@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -14,7 +14,7 @@ use cleanr_plugin_api::{
     PluginCapability, PluginDiagnostic, PluginDiscovery, PluginManifest, PluginSource, TrustLevel,
     discover_bundles, sorted_dir_entries,
 };
-use globset::{Glob, GlobMatcher};
+use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use schemars::{JsonSchema, schema_for};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -53,8 +53,24 @@ pub struct RuleMatcher {
     pub path_glob: Option<String>,
     pub file_name: Option<String>,
     pub extension: Option<String>,
+    pub project: Option<ProjectMatcher>,
     pub max_age_days: Option<i64>,
     pub min_size: Option<u64>,
+}
+
+/// Match generated directories relative to a project root identified by direct children.
+///
+/// Name fields use glob syntax and are evaluated against the entries captured by the same scan.
+/// Each non-empty positive group uses any-of semantics; excluded groups must have no matches.
+/// Exclusions only veto children present in that snapshot and are not a standalone safety boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProjectMatcher {
+    pub marker_globs: Vec<String>,
+    pub root_dir_globs: Vec<String>,
+    pub excluded_marker_globs: Vec<String>,
+    pub excluded_root_dir_globs: Vec<String>,
+    pub artifact_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -75,6 +91,27 @@ pub struct LoadedRulePack {
 #[derive(Debug, Clone)]
 struct CompiledRule {
     path_glob: Option<GlobMatcher>,
+    project: Option<CompiledProjectMatcher>,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledProjectMatcher {
+    marker_globs: Vec<GlobMatcher>,
+    root_dir_globs: Vec<GlobMatcher>,
+    excluded_marker_globs: Vec<GlobMatcher>,
+    excluded_root_dir_globs: Vec<GlobMatcher>,
+    artifact_paths: Vec<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScanContext {
+    children_by_dir: BTreeMap<PathBuf, DirectoryChildren>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DirectoryChildren {
+    files: BTreeSet<String>,
+    directories: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +122,8 @@ pub struct RuleRegistry {
     file_name_index: BTreeMap<String, Vec<(usize, usize)>>,
     extension_index: BTreeMap<String, Vec<(usize, usize)>>,
     generic_rules: Vec<(usize, usize)>,
+    project_marker_filter: GlobSet,
+    project_root_dir_filter: GlobSet,
 }
 
 impl RulePack {
@@ -145,6 +184,7 @@ impl RulePack {
                 || rule.matcher.path_glob.is_some()
                 || rule.matcher.file_name.is_some()
                 || rule.matcher.extension.is_some()
+                || rule.matcher.project.is_some()
                 || rule.matcher.max_age_days.is_some()
                 || rule.matcher.min_size.is_some();
             if !has_matcher {
@@ -155,8 +195,135 @@ impl RulePack {
                     format!("rule {}:{} has an invalid path_glob", self.id, rule.id)
                 })?;
             }
+            if let Some(project) = &rule.matcher.project {
+                if rule.matcher.kind != Some(EntryKind::Directory) {
+                    bail!(
+                        "rule {}:{} project matcher requires kind = directory",
+                        self.id,
+                        rule.id
+                    );
+                }
+                if rule.matcher.dir_name.is_some()
+                    || rule.matcher.path_glob.is_some()
+                    || rule.matcher.file_name.is_some()
+                    || rule.matcher.extension.is_some()
+                {
+                    bail!(
+                        "rule {}:{} project matcher cannot be combined with another path matcher",
+                        self.id,
+                        rule.id
+                    );
+                }
+                project.validate(&self.id, &rule.id)?;
+            }
         }
         Ok(())
+    }
+}
+
+impl ProjectMatcher {
+    fn validate(&self, pack_id: &str, rule_id: &str) -> Result<()> {
+        if self.marker_globs.is_empty() {
+            bail!("rule {pack_id}:{rule_id} project matcher has no marker_globs");
+        }
+        if self.artifact_paths.is_empty() {
+            bail!("rule {pack_id}:{rule_id} project matcher has no artifact_paths");
+        }
+        for (field, patterns) in [
+            ("marker_globs", &self.marker_globs),
+            ("root_dir_globs", &self.root_dir_globs),
+            ("excluded_marker_globs", &self.excluded_marker_globs),
+            ("excluded_root_dir_globs", &self.excluded_root_dir_globs),
+        ] {
+            for pattern in patterns {
+                validate_child_name_glob(pattern).with_context(|| {
+                    format!("rule {pack_id}:{rule_id} has an invalid project {field} pattern")
+                })?;
+            }
+        }
+        for artifact_path in &self.artifact_paths {
+            project_artifact_components(artifact_path).with_context(|| {
+                format!(
+                    "rule {pack_id}:{rule_id} has an invalid project artifact path {artifact_path:?}"
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl CompiledProjectMatcher {
+    fn compile(project: &ProjectMatcher) -> Result<Self> {
+        Ok(Self {
+            marker_globs: compile_name_globs(&project.marker_globs)?,
+            root_dir_globs: compile_name_globs(&project.root_dir_globs)?,
+            excluded_marker_globs: compile_name_globs(&project.excluded_marker_globs)?,
+            excluded_root_dir_globs: compile_name_globs(&project.excluded_root_dir_globs)?,
+            artifact_paths: project
+                .artifact_paths
+                .iter()
+                .map(|path| project_artifact_components(path))
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+
+    fn matches(&self, entry: &ScanEntry, context: &ScanContext) -> bool {
+        self.artifact_paths.iter().any(|artifact_path| {
+            let Some(root) = project_root(&entry.path, artifact_path) else {
+                return false;
+            };
+            let Some(children) = context.children_by_dir.get(root) else {
+                return false;
+            };
+            matches_required_group(&self.marker_globs, &children.files)
+                && matches_required_group(&self.root_dir_globs, &children.directories)
+                && !matches_any(&self.excluded_marker_globs, &children.files)
+                && !matches_any(&self.excluded_root_dir_globs, &children.directories)
+        })
+    }
+}
+
+impl ScanContext {
+    fn from_entries(
+        entries: &[ScanEntry],
+        project_roots: &HashSet<PathBuf>,
+        project_marker_filter: &GlobSet,
+        project_root_dir_filter: &GlobSet,
+    ) -> Self {
+        let mut context = Self::default();
+        for entry in entries {
+            let Some(parent) = entry.path.parent() else {
+                continue;
+            };
+            if !project_roots.contains(parent) {
+                continue;
+            }
+            let Some(name) = entry.path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let relevant = match entry.kind {
+                EntryKind::File => project_marker_filter.is_match(name),
+                EntryKind::Directory => project_root_dir_filter.is_match(name),
+                EntryKind::Symlink | EntryKind::Other => false,
+            };
+            if !relevant {
+                continue;
+            }
+            let children = context
+                .children_by_dir
+                .entry(parent.to_path_buf())
+                .or_default();
+            match entry.kind {
+                EntryKind::File => {
+                    children.files.insert(name.to_string());
+                }
+                EntryKind::Directory => {
+                    children.directories.insert(name.to_string());
+                }
+                EntryKind::Symlink | EntryKind::Other => {}
+            }
+        }
+        context
     }
 }
 
@@ -267,7 +434,7 @@ impl RuleRegistry {
                 .iter()
                 .any(|enabled| enabled == &pack.definition.id)
         });
-        registry.rebuild_indexes();
+        registry.rebuild_indexes()?;
         Ok(registry)
     }
 
@@ -303,19 +470,39 @@ impl RuleRegistry {
 
     /// Annotate a scan with one fixed reference time for all age-based rules.
     pub fn annotate_entries_at(&self, entries: &mut [ScanEntry], as_of: DateTime<Utc>) {
+        let project_roots = self.project_roots(entries);
+        let context = ScanContext::from_entries(
+            entries,
+            &project_roots,
+            &self.project_marker_filter,
+            &self.project_root_dir_filter,
+        );
         for entry in entries {
-            entry.rule_hits = self.hits_for_at(entry, as_of);
+            entry.rule_hits = self.hits_for_at_with_context(entry, as_of, Some(&context));
         }
     }
 
+    /// Match rules that depend only on one entry.
+    ///
+    /// Use [`Self::annotate_entries`] for project-aware rules because their marker evidence comes
+    /// from the complete scan snapshot.
     #[must_use]
     pub fn hits_for(&self, entry: &ScanEntry) -> Vec<RuleHit> {
         self.hits_for_at(entry, Utc::now())
     }
 
-    /// Return matching rules using a caller-provided reference time.
+    /// Match entry-local rules using a caller-provided reference time.
     #[must_use]
     pub fn hits_for_at(&self, entry: &ScanEntry, as_of: DateTime<Utc>) -> Vec<RuleHit> {
+        self.hits_for_at_with_context(entry, as_of, None)
+    }
+
+    fn hits_for_at_with_context(
+        &self,
+        entry: &ScanEntry,
+        as_of: DateTime<Utc>,
+        context: Option<&ScanContext>,
+    ) -> Vec<RuleHit> {
         let mut candidates = Vec::with_capacity(self.generic_rules.len() + 4);
         candidates.extend(self.generic_rules.iter().copied());
         let file_name = entry.path.file_name().map(|name| name.to_string_lossy());
@@ -372,6 +559,7 @@ impl RuleRegistry {
                     compiled,
                     file_name.as_deref(),
                     path_for_glob,
+                    context,
                     as_of,
                 )
                 .then(|| RuleHit {
@@ -393,6 +581,36 @@ impl RuleRegistry {
             .collect()
     }
 
+    fn project_roots(&self, entries: &[ScanEntry]) -> HashSet<PathBuf> {
+        let mut roots = HashSet::new();
+        for entry in entries {
+            if entry.kind != EntryKind::Directory {
+                continue;
+            }
+            let Some(name) = entry.path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            for (pack_index, rule_index) in
+                self.dir_name_index.get(name).into_iter().flatten().copied()
+            {
+                let Some(project) = self
+                    .packs
+                    .get(pack_index)
+                    .and_then(|pack| pack.compiled_rules.get(rule_index))
+                    .and_then(|compiled| compiled.project.as_ref())
+                else {
+                    continue;
+                };
+                for artifact_path in &project.artifact_paths {
+                    if let Some(root) = project_root(&entry.path, artifact_path) {
+                        roots.insert(root.to_path_buf());
+                    }
+                }
+            }
+        }
+        roots
+    }
+
     fn empty() -> Self {
         Self {
             packs: Vec::new(),
@@ -401,6 +619,8 @@ impl RuleRegistry {
             file_name_index: BTreeMap::new(),
             extension_index: BTreeMap::new(),
             generic_rules: Vec::new(),
+            project_marker_filter: GlobSet::empty(),
+            project_root_dir_filter: GlobSet::empty(),
         }
     }
 
@@ -421,17 +641,23 @@ impl RuleRegistry {
         let compiled_rules = pack
             .rules
             .iter()
-            .map(|rule| {
-                rule.matcher
+            .map(|rule| -> Result<CompiledRule> {
+                let path_glob = rule
+                    .matcher
                     .path_glob
                     .as_deref()
                     .map(Glob::new)
-                    .transpose()
-                    .map(|glob| CompiledRule {
-                        path_glob: glob.map(|glob| glob.compile_matcher()),
-                    })
+                    .transpose()?
+                    .map(|glob| glob.compile_matcher());
+                let project = rule
+                    .matcher
+                    .project
+                    .as_ref()
+                    .map(CompiledProjectMatcher::compile)
+                    .transpose()?;
+                Ok(CompiledRule { path_glob, project })
             })
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>>>()?;
         if trust == TrustLevel::Untrusted && pack.rules.iter().any(|rule| rule.default_selected) {
             self.diagnostics.push(PluginDiagnostic::warning(
                 "untrusted-default-selection-disabled",
@@ -449,7 +675,12 @@ impl RuleRegistry {
             plugin_id,
             compiled_rules,
         });
-        self.rebuild_indexes();
+        if let Err(error) = self.rebuild_indexes() {
+            self.packs.pop();
+            self.rebuild_indexes()
+                .context("failed to restore rule indexes after rejecting a rule pack")?;
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -537,11 +768,13 @@ impl RuleRegistry {
         }
     }
 
-    fn rebuild_indexes(&mut self) {
+    fn rebuild_indexes(&mut self) -> Result<()> {
         self.dir_name_index.clear();
         self.file_name_index.clear();
         self.extension_index.clear();
         self.generic_rules.clear();
+        let mut project_marker_filter = GlobSetBuilder::new();
+        let mut project_root_dir_filter = GlobSetBuilder::new();
         for (pack_index, pack) in self.packs.iter().enumerate() {
             for (rule_index, rule) in pack.definition.rules.iter().enumerate() {
                 let key = (pack_index, rule_index);
@@ -550,6 +783,33 @@ impl RuleRegistry {
                         .entry(name.clone())
                         .or_default()
                         .push(key);
+                } else if let Some(project) = &rule.matcher.project {
+                    for pattern in project
+                        .marker_globs
+                        .iter()
+                        .chain(&project.excluded_marker_globs)
+                    {
+                        project_marker_filter.add(Glob::new(pattern).with_context(|| {
+                            format!("failed to compile project marker glob {pattern:?}")
+                        })?);
+                    }
+                    for pattern in project
+                        .root_dir_globs
+                        .iter()
+                        .chain(&project.excluded_root_dir_globs)
+                    {
+                        project_root_dir_filter.add(Glob::new(pattern).with_context(|| {
+                            format!("failed to compile project root-directory glob {pattern:?}")
+                        })?);
+                    }
+                    for artifact_path in &project.artifact_paths {
+                        if let Some(name) = artifact_path.rsplit('/').next() {
+                            self.dir_name_index
+                                .entry(name.to_string())
+                                .or_default()
+                                .push(key);
+                        }
+                    }
                 } else if let Some(name) = &rule.matcher.file_name {
                     self.file_name_index
                         .entry(name.clone())
@@ -565,6 +825,13 @@ impl RuleRegistry {
                 }
             }
         }
+        self.project_marker_filter = project_marker_filter
+            .build()
+            .context("failed to build project marker glob index")?;
+        self.project_root_dir_filter = project_root_dir_filter
+            .build()
+            .context("failed to build project root-directory glob index")?;
+        Ok(())
     }
 }
 
@@ -574,6 +841,7 @@ fn matches_rule(
     compiled: &CompiledRule,
     file_name: Option<&str>,
     path_for_glob: Option<&Path>,
+    context: Option<&ScanContext>,
     as_of: DateTime<Utc>,
 ) -> bool {
     let matcher = &rule.matcher;
@@ -622,7 +890,72 @@ fn matches_rule(
             return false;
         }
     }
+    if let Some(project) = &compiled.project {
+        let Some(context) = context else {
+            return false;
+        };
+        if !project.matches(entry, context) {
+            return false;
+        }
+    }
     true
+}
+
+fn validate_child_name_glob(pattern: &str) -> Result<()> {
+    if pattern.trim().is_empty() {
+        bail!("name glob cannot be empty");
+    }
+    if pattern.contains('/') || pattern.contains('\\') {
+        bail!("name glob must match one direct child name");
+    }
+    Glob::new(pattern).context("invalid glob syntax")?;
+    Ok(())
+}
+
+fn compile_name_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
+    patterns
+        .iter()
+        .map(|pattern| {
+            Glob::new(pattern)
+                .map(|glob| glob.compile_matcher())
+                .context("invalid project child-name glob")
+        })
+        .collect()
+}
+
+fn project_artifact_components(path: &str) -> Result<Vec<String>> {
+    if path.is_empty() || path.starts_with('/') || path.contains('\\') {
+        bail!("artifact path must be a non-empty relative path using '/' separators");
+    }
+    let components = path.split('/').map(str::to_string).collect::<Vec<_>>();
+    if components
+        .iter()
+        .any(|component| component.is_empty() || matches!(component.as_str(), "." | ".."))
+    {
+        bail!("artifact path contains an unsupported component");
+    }
+    Ok(components)
+}
+
+fn project_root<'a>(path: &'a Path, artifact_path: &[String]) -> Option<&'a Path> {
+    let mut current = path;
+    for expected in artifact_path.iter().rev() {
+        if current.file_name().and_then(|name| name.to_str()) != Some(expected.as_str()) {
+            return None;
+        }
+        current = current.parent()?;
+    }
+    Some(current)
+}
+
+fn matches_required_group(matchers: &[GlobMatcher], names: &BTreeSet<String>) -> bool {
+    matchers.is_empty() || matches_any(matchers, names)
+}
+
+fn matches_any(matchers: &[GlobMatcher], names: &BTreeSet<String>) -> bool {
+    matchers
+        .iter()
+        .any(|matcher| names.iter().any(|name| matcher.is_match(name)))
 }
 
 fn is_toml_file(path: &Path) -> bool {
@@ -665,6 +998,250 @@ mod tests {
         assert_eq!(hits[0].rule_id, "node-modules");
         assert!(hits[0].default_selected);
         assert_eq!(hits[0].confidence, Confidence::High);
+    }
+
+    #[test]
+    fn builtin_dev_covers_project_artifacts_across_supported_stacks() {
+        let registry = RuleRegistry::builtin().expect("builtin rules load");
+        let cases = [
+            ("/cargo/Cargo.toml", "/cargo/target", "rust-target"),
+            ("/node/package.json", "/node/node_modules", "node-modules"),
+            (
+                "/react-native/package.json",
+                "/react-native/android/build",
+                "react-native-android-build-cache",
+            ),
+            (
+                "/unity/Assembly-CSharp.csproj",
+                "/unity/Library",
+                "unity-generated-cache",
+            ),
+            (
+                "/stack/stack.yaml",
+                "/stack/.stack-work",
+                "haskell-stack-work",
+            ),
+            (
+                "/cabal/cabal.project",
+                "/cabal/dist-newstyle",
+                "haskell-cabal-dist",
+            ),
+            ("/sbt/build.sbt", "/sbt/project/target", "sbt-target"),
+            ("/maven/pom.xml", "/maven/target", "maven-target"),
+            (
+                "/gradle/build.gradle.kts",
+                "/gradle/build",
+                "gradle-project-artifacts",
+            ),
+            (
+                "/cmake/CMakeLists.txt",
+                "/cmake/cmake-build-debug",
+                "cmake-build-output",
+            ),
+            (
+                "/unreal/game.uproject",
+                "/unreal/DerivedDataCache",
+                "unreal-generated-cache",
+            ),
+            (
+                "/jupyter/notebook.ipynb",
+                "/jupyter/.ipynb_checkpoints",
+                "jupyter-checkpoints",
+            ),
+            ("/python/app.py", "/python/.nox", "python-nox-environments"),
+            ("/pixi/pixi.toml", "/pixi/.pixi", "pixi-environment"),
+            (
+                "/composer/composer.json",
+                "/composer/vendor",
+                "composer-vendor",
+            ),
+            (
+                "/flutter/pubspec.yaml",
+                "/flutter/.dart_tool",
+                "dart-tooling-cache",
+            ),
+            (
+                "/elixir/mix.exs",
+                "/elixir/.lexical",
+                "elixir-language-server-cache",
+            ),
+            ("/swift/Package.swift", "/swift/.build", "swift-build-cache"),
+            ("/zig/build.zig", "/zig/.zig-cache", "zig-cache"),
+            (
+                "/godot/project.godot",
+                "/godot/.godot",
+                "godot-import-cache",
+            ),
+            (
+                "/dotnet/app.csproj",
+                "/dotnet/obj",
+                "dotnet-intermediate-output",
+            ),
+            ("/turbo/turbo.json", "/turbo/.turbo", "turborepo-cache"),
+            (
+                "/terraform/.terraform.lock.hcl",
+                "/terraform/.terraform",
+                "terraform-working-data",
+            ),
+            (
+                "/cocoapods/Podfile",
+                "/cocoapods/Pods",
+                "cocoapods-dependencies",
+            ),
+        ];
+        let mut entries = cases
+            .iter()
+            .flat_map(|(marker, artifact, _)| {
+                [
+                    test_entry(marker, EntryKind::File),
+                    test_entry(artifact, EntryKind::Directory),
+                ]
+            })
+            .collect::<Vec<_>>();
+        entries.push(test_entry("/react-native/android", EntryKind::Directory));
+
+        registry.annotate_entries(&mut entries);
+
+        for (_, artifact, expected_rule) in cases {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.path.as_path() == Path::new(artifact))
+                .expect("artifact entry");
+            assert!(
+                entry
+                    .rule_hits
+                    .iter()
+                    .any(|hit| hit.rule_id == expected_rule),
+                "{artifact} should match {expected_rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_dev_keeps_sensitive_or_expensive_artifacts_review_only() {
+        let registry = RuleRegistry::builtin().expect("builtin rules load");
+        let cases = [
+            (
+                "/unreal/game.uproject",
+                "/unreal/Saved",
+                "unreal-saved-data",
+                Confidence::Low,
+            ),
+            (
+                "/jupyter/notebook.ipynb",
+                "/jupyter/.ipynb_checkpoints",
+                "jupyter-checkpoints",
+                Confidence::Low,
+            ),
+            (
+                "/terraform/.terraform.lock.hcl",
+                "/terraform/.terraform",
+                "terraform-working-data",
+                Confidence::Low,
+            ),
+            (
+                "/composer/composer.json",
+                "/composer/vendor",
+                "composer-vendor",
+                Confidence::Medium,
+            ),
+        ];
+        let mut entries = cases
+            .iter()
+            .flat_map(|(marker, artifact, _, _)| {
+                [
+                    test_entry(marker, EntryKind::File),
+                    test_entry(artifact, EntryKind::Directory),
+                ]
+            })
+            .collect::<Vec<_>>();
+        entries.push(test_entry("/python/app.py", EntryKind::File));
+        entries.push(test_entry("/python/.venv", EntryKind::Directory));
+
+        registry.annotate_entries(&mut entries);
+
+        for (_, artifact, expected_rule, expected_confidence) in cases {
+            let hit = entries
+                .iter()
+                .find(|entry| entry.path.as_path() == Path::new(artifact))
+                .and_then(|entry| {
+                    entry
+                        .rule_hits
+                        .iter()
+                        .find(|hit| hit.rule_id == expected_rule)
+                })
+                .expect("review-only rule hit");
+            assert_eq!(hit.confidence, expected_confidence);
+            assert!(!hit.default_selected);
+        }
+        assert!(
+            entries
+                .iter()
+                .find(|entry| entry.path.as_path() == Path::new("/python/.venv"))
+                .expect("venv entry")
+                .rule_hits
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn project_markers_disambiguate_target_directories() {
+        let registry = RuleRegistry::builtin().expect("builtin rules load");
+        let mut entries = vec![
+            test_entry("/cargo/Cargo.toml", EntryKind::File),
+            test_entry("/cargo/target", EntryKind::Directory),
+            test_entry("/maven/pom.xml", EntryKind::File),
+            test_entry("/maven/target", EntryKind::Directory),
+            test_entry("/sbt/build.sbt", EntryKind::File),
+            test_entry("/sbt/target", EntryKind::Directory),
+            test_entry("/unrelated/target", EntryKind::Directory),
+        ];
+
+        registry.annotate_entries(&mut entries);
+
+        for (path, expected_rule) in [
+            ("/cargo/target", "rust-target"),
+            ("/maven/target", "maven-target"),
+            ("/sbt/target", "sbt-target"),
+        ] {
+            let hits = &entries
+                .iter()
+                .find(|entry| entry.path.as_path() == Path::new(path))
+                .expect("target entry")
+                .rule_hits;
+            assert_eq!(hits.len(), 1, "{path} should have one unambiguous hit");
+            assert_eq!(hits[0].rule_id, expected_rule);
+        }
+        assert!(entries[6].rule_hits.is_empty());
+    }
+
+    #[test]
+    fn nested_project_rules_keep_equivalent_safety_semantics() {
+        let registry = RuleRegistry::builtin().expect("builtin rules load");
+        let mut entries = vec![
+            test_entry("/react-native/package.json", EntryKind::File),
+            test_entry("/react-native/android", EntryKind::Directory),
+            test_entry("/react-native/ios", EntryKind::Directory),
+            test_entry("/react-native/android/build.gradle", EntryKind::File),
+            test_entry("/react-native/android/build", EntryKind::Directory),
+            test_entry("/react-native/ios/Podfile", EntryKind::File),
+            test_entry("/react-native/ios/Pods", EntryKind::Directory),
+        ];
+
+        registry.annotate_entries(&mut entries);
+
+        for index in [4, 6] {
+            let hits = &entries[index].rule_hits;
+            assert_eq!(hits.len(), 2);
+            assert!(hits.windows(2).all(|pair| {
+                pair[0].category == pair[1].category
+                    && pair[0].confidence == pair[1].confidence
+                    && pair[0].default_selected == pair[1].default_selected
+                    && pair[0].trust == pair[1].trust
+                    && pair[0].reason == pair[1].reason
+                    && pair[0].risk_note == pair[1].risk_note
+            }));
+        }
     }
 
     #[test]
@@ -769,6 +1346,213 @@ mod tests {
                     rule_hits: vec![],
                 })
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn project_matcher_uses_scan_snapshot_and_exact_artifact_paths() {
+        let raw = r#"
+        id = "project-test"
+        name = "Project Test"
+        version = "1.0.0"
+        description = "Project matcher"
+        categories = ["build-cache"]
+
+        [[rules]]
+        id = "gradle-build"
+        label = "Gradle build"
+        category = "build-cache"
+        match = { kind = "directory", project = { marker_globs = ["build.gradle", "build.gradle.kts"], artifact_paths = ["build", "nested/output"] } }
+        confidence = "high"
+        default_selected = true
+        action = "trash"
+        reason = "generated"
+        risk_note = "rebuild"
+        "#;
+        let mut registry = RuleRegistry::empty();
+        registry
+            .add_pack(
+                RulePack::from_toml(raw).expect("rule pack"),
+                PluginSource::Builtin,
+                TrustLevel::Builtin,
+                None,
+            )
+            .expect("add pack");
+        let artifact = ScanEntry {
+            path: PathBuf::from("/repo/build"),
+            kind: EntryKind::Directory,
+            size_bytes: 1,
+            modified_at: None,
+            rule_hits: vec![],
+        };
+
+        assert!(registry.hits_for(&artifact).is_empty());
+
+        let mut entries = vec![
+            ScanEntry {
+                path: PathBuf::from("/repo/build.gradle.kts"),
+                kind: EntryKind::File,
+                size_bytes: 1,
+                modified_at: None,
+                rule_hits: vec![],
+            },
+            artifact,
+            ScanEntry {
+                path: PathBuf::from("/repo/nested/output"),
+                kind: EntryKind::Directory,
+                size_bytes: 1,
+                modified_at: None,
+                rule_hits: vec![],
+            },
+            ScanEntry {
+                path: PathBuf::from("/unrelated/build"),
+                kind: EntryKind::Directory,
+                size_bytes: 1,
+                modified_at: None,
+                rule_hits: vec![],
+            },
+            ScanEntry {
+                path: PathBuf::from("/repo/other/output"),
+                kind: EntryKind::Directory,
+                size_bytes: 1,
+                modified_at: None,
+                rule_hits: vec![],
+            },
+        ];
+
+        registry.annotate_entries(&mut entries);
+
+        assert_eq!(entries[1].rule_hits[0].rule_id, "gradle-build");
+        assert_eq!(entries[2].rule_hits[0].rule_id, "gradle-build");
+        assert!(entries[3].rule_hits.is_empty());
+        assert!(entries[4].rule_hits.is_empty());
+    }
+
+    #[test]
+    fn project_matcher_supports_required_and_excluded_root_children() {
+        let raw = r#"
+        id = "project-conditions"
+        name = "Project Conditions"
+        version = "1.0.0"
+        description = "Project matcher conditions"
+        categories = ["build-cache"]
+
+        [[rules]]
+        id = "mobile-build"
+        label = "Mobile build"
+        category = "build-cache"
+        match = { kind = "directory", project = { marker_globs = ["package.json"], root_dir_globs = ["ios", "android"], excluded_marker_globs = ["blocked.json"], excluded_root_dir_globs = ["vendor-project"], artifact_paths = ["android/build"] } }
+        confidence = "high"
+        default_selected = true
+        action = "trash"
+        reason = "generated"
+        risk_note = "rebuild"
+        "#;
+        let mut registry = RuleRegistry::empty();
+        registry
+            .add_pack(
+                RulePack::from_toml(raw).expect("rule pack"),
+                PluginSource::Builtin,
+                TrustLevel::Builtin,
+                None,
+            )
+            .expect("add pack");
+        let scan = |extra: Vec<ScanEntry>| {
+            let mut entries = vec![
+                test_entry("/repo/package.json", EntryKind::File),
+                test_entry("/repo/android", EntryKind::Directory),
+                test_entry("/repo/android/build", EntryKind::Directory),
+            ];
+            entries.extend(extra);
+            registry.annotate_entries(&mut entries);
+            entries[2].rule_hits.clone()
+        };
+
+        assert_eq!(scan(vec![])[0].rule_id, "mobile-build");
+        assert!(scan(vec![test_entry("/repo/blocked.json", EntryKind::File)]).is_empty());
+        assert!(
+            scan(vec![test_entry(
+                "/repo/vendor-project",
+                EntryKind::Directory
+            )])
+            .is_empty()
+        );
+
+        let mut missing_required_dir = vec![
+            test_entry("/repo/package.json", EntryKind::File),
+            test_entry("/repo/android/build", EntryKind::Directory),
+        ];
+        registry.annotate_entries(&mut missing_required_dir);
+        assert!(missing_required_dir[1].rule_hits.is_empty());
+    }
+
+    #[test]
+    fn project_context_does_not_index_markers_without_artifact_candidates() {
+        let registry = RuleRegistry::builtin().expect("builtin rules load");
+        let entries = (0..128)
+            .map(|index| test_entry(&format!("/repo/package-{index}/module.py"), EntryKind::File))
+            .collect::<Vec<_>>();
+
+        let roots = registry.project_roots(&entries);
+        let context = ScanContext::from_entries(
+            &entries,
+            &roots,
+            &registry.project_marker_filter,
+            &registry.project_root_dir_filter,
+        );
+
+        assert!(roots.is_empty());
+        assert!(context.children_by_dir.is_empty());
+    }
+
+    #[test]
+    fn project_matcher_rejects_unsafe_or_ambiguous_declarations() {
+        let rule_pack = |matcher: &str| {
+            format!(
+                r#"
+                id = "invalid-project"
+                name = "Invalid Project"
+                version = "1.0.0"
+                description = "Invalid project matcher"
+                categories = ["build-cache"]
+
+                [[rules]]
+                id = "invalid"
+                label = "Invalid"
+                category = "build-cache"
+                match = {matcher}
+                confidence = "medium"
+                default_selected = false
+                action = "trash"
+                reason = "generated"
+                risk_note = "review"
+                "#
+            )
+        };
+
+        assert!(
+            RulePack::from_toml(&rule_pack(
+                r#"{ project = { marker_globs = ["Cargo.toml"], artifact_paths = ["target"] } }"#
+            ))
+            .is_err()
+        );
+        assert!(
+            RulePack::from_toml(&rule_pack(
+                r#"{ kind = "directory", project = { marker_globs = ["nested/Cargo.toml"], artifact_paths = ["target"] } }"#
+            ))
+            .is_err()
+        );
+        assert!(
+            RulePack::from_toml(&rule_pack(
+                r#"{ kind = "directory", project = { marker_globs = ["Cargo.toml"], artifact_paths = ["../target"] } }"#
+            ))
+            .is_err()
+        );
+        assert!(
+            RulePack::from_toml(&rule_pack(
+                r#"{ kind = "directory", dir_name = "target", project = { marker_globs = ["Cargo.toml"], artifact_paths = ["target"] } }"#
+            ))
+            .is_err()
         );
     }
 
@@ -950,6 +1734,16 @@ command = "cleanr-dynamic-example"
             diagnostic.code == "dynamic-candidates-runtime-disabled"
                 && diagnostic.message.contains("dynamic.example")
         }));
+    }
+
+    fn test_entry(path: &str, kind: EntryKind) -> ScanEntry {
+        ScanEntry {
+            path: PathBuf::from(path),
+            kind,
+            size_bytes: 2 * 1024 * 1024,
+            modified_at: None,
+            rule_hits: vec![],
+        }
     }
 
     fn test_rule_pack(id: &str, name: &str) -> String {

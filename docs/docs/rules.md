@@ -41,14 +41,28 @@ trusted source can preselect an item.
 
 ### `builtin-dev`
 
-Recognizes common generated developer data, including:
+The built-in plugin manifest `cleanr.builtin.dev` provides the `builtin-dev`
+rule pack. In addition to known package-manager and tool caches, the pack uses
+project-aware rules for generated project artifacts. These rules first identify
+a project root from marker files, optionally constrained by its direct child
+directories, then match only declared, exact paths relative to that root. A
+directory name alone is not enough to identify one of these project artifacts.
 
-- `node_modules`, Rust `target`, Python tool caches, and Next.js caches;
-- Cargo, npm, pnpm, Yarn, pip, uv, Gradle, Maven, and Go caches;
-- Xcode `DerivedData`.
+Project-aware coverage includes:
 
-Most clearly rebuildable entries are high confidence. More ambiguous entries,
-such as tox environments and Maven's local repository, are not preselected.
+- Cargo, Node.js and React Native, Unity, Haskell, SBT, Maven, Gradle, CMake,
+  and Unreal Engine;
+- Jupyter, Python, Pixi, Composer, Pub, Flutter, Elixir, Swift, Zig, Godot,
+  and .NET;
+- Turborepo, Terraform, and CocoaPods.
+
+The pack also retains rules for caches such as Cargo registries and Git
+dependencies, npm, pnpm, Yarn, pip, uv, Go modules, Xcode `DerivedData`, and
+Next.js and Python tool caches. Python `.venv` directories are intentionally not
+covered: they may contain local environments that are costly or impossible to
+reproduce exactly. Other higher-risk or potentially locally stateful
+directories are review-only and are never preselected; read their reason and
+risk note before including them in a cleanup plan.
 
 ### `builtin-general`
 
@@ -90,6 +104,33 @@ Run `/rules` inside the TUI to inspect the active packs and rules.
 The recommended format is a declarative plugin bundle. See
 [Plugins](./plugins) for a complete minimal example, validation commands, and
 the trust model.
+
+For generated paths that are meaningful only inside a particular project, use
+a project matcher instead of a broad directory-name or path glob. Positive
+marker and root-directory globs identify the project root, excluded globs veto
+ambiguous roots, and `artifact_paths` lists the exact relative directories that
+may match:
+
+```toml
+[rules.match]
+kind = "directory"
+
+[rules.match.project]
+marker_globs = ["acme-project.toml"]
+root_dir_globs = ["src"]
+excluded_marker_globs = ["acme-keep-build"]
+excluded_root_dir_globs = ["keep-output"]
+artifact_paths = ["build/cache", "build/generated"]
+```
+
+This fragment belongs to a `[[rules]]` entry. Keep the usual confidence,
+default-selection, reason, and risk fields conservative, especially when an
+artifact may require network access or contain local-only state. Excluded globs
+only veto children observed in the same scan snapshot; an ignored path is not
+proof that a child does not exist, so never use an exclusion as the rule's only
+safety boundary. When publishing a bundle that uses this matcher, set its
+`cleanr_version` to the first Cleanr release whose rule schema supports
+`project`; do not reuse the generic `>=0.1.0` minimum from the minimal example.
 
 Legacy loose TOML rule-pack files are still discovered in plugin directories,
 but bundles provide version and compatibility metadata and are preferred.
